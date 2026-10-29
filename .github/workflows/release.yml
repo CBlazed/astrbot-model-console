@@ -1,0 +1,107 @@
+name: release
+
+# 打 tag（v*）后由 GitHub Actions 在 windows-latest 上构建便携包并发布 Release。
+# 为什么在 CI 里构建：便携包必须带 node.exe + start.cmd，构建脚本只能在 Windows 上跑
+# （复制 process.execPath、PowerShell Compress-Archive）；本地构建依赖构建机的 node 版本，
+# 交给 CI 可以复现、可审计，避免“发出去的包来自谁的机器”这类问题。
+#
+# 产物：
+#   AstrBotModelConsole-<version>-win-x64.zip         便携包（解压双击 start.cmd）
+#   AstrBotModelConsole-<version>-win-x64.zip.sha256.txt  zip 的 SHA-256
+# 发布说明由 scripts/release-notes.mjs 从 CHANGELOG.md 的「上一个 tag → 本次版本」区间生成。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码（需要完整 tag 历史来推算上一个版本）
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: 显示运行时
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+
+      - name: 跑测试（发布前必须全绿）
+        shell: pwsh
+        run: node --test --test-isolation=none
+
+      - name: 校验版本与 tag 一致
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = node -p "require('./package.json').version"
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "v$version" }
+          if ($tag -ne "v$version") {
+            throw "tag $tag 与 package.json version $version 不一致：请先改 package.json 再打 tag。"
+          }
+          "版本 $version 与 tag $tag 一致。"
+
+      - name: 构建便携包（zip）
+        shell: pwsh
+        run: node scripts/build-package.mjs --zip
+
+      - name: 生成发布说明与校验文件
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = node -p "require('./package.json').version"
+          $tag = "v$version"
+          $previous = (git tag --sort=-v:refname | Where-Object { $_ -ne $tag } | Select-Object -First 1)
+          if ($previous) {
+            "上一个版本 tag：$previous"
+            node scripts/release-notes.mjs --version $version --since $previous.TrimStart('v') --out RELEASE_NOTES.md
+          } else {
+            "没有更早的 tag，发布说明覆盖到当前版本为止。"
+            node scripts/release-notes.mjs --version $version --out RELEASE_NOTES.md
+          }
+          $zip = "dist/AstrBotModelConsole-$version-win-x64.zip"
+          if (-not (Test-Path -LiteralPath $zip)) { throw "构建产物不存在：$zip" }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLower()
+          "$hash  AstrBotModelConsole-$version-win-x64.zip" | Set-Content -Encoding ascii -LiteralPath "$zip.sha256.txt"
+          "" | Add-Content -Encoding utf8 -LiteralPath RELEASE_NOTES.md
+          "### 校验" | Add-Content -Encoding utf8 -LiteralPath RELEASE_NOTES.md
+          "" | Add-Content -Encoding utf8 -LiteralPath RELEASE_NOTES.md
+          "- zip SHA-256：``$hash``" | Add-Content -Encoding utf8 -LiteralPath RELEASE_NOTES.md
+          "- 包内逐文件校验：``SHA256SUMS.txt``（含 node.exe，共 $((Get-Content -LiteralPath 'dist/AstrBotModelConsole/SHA256SUMS.txt').Count) 行）" | Add-Content -Encoding utf8 -LiteralPath RELEASE_NOTES.md
+
+      - name: 发布 Release（已存在则覆盖上传资产）
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = node -p "require('./package.json').version"
+          $tag = "v$version"
+          $zip = "dist/AstrBotModelConsole-$version-win-x64.zip"
+          $sum = "$zip.sha256.txt"
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            "Release $tag 已存在，覆盖上传资产。"
+            gh release upload $tag $zip $sum --clobber
+          } else {
+            gh release create $tag --verify-tag --title "$tag" --notes-file RELEASE_NOTES.md $zip $sum
+          }
+          "发布完成：$tag"
+          Get-ChildItem dist/*.zip, dist/*.sha256.txt | Select-Object Name, Length

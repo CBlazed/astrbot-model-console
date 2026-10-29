@@ -1,6 +1,7 @@
 # AstrBot 模型控制台（Model Console）
 
 [![ci](https://github.com/CBlazed/astrbot-model-console/actions/workflows/ci.yml/badge.svg)](https://github.com/CBlazed/astrbot-model-console/actions/workflows/ci.yml)
+[![release](https://github.com/CBlazed/astrbot-model-console/actions/workflows/release.yml/badge.svg)](https://github.com/CBlazed/astrbot-model-console/actions/workflows/release.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **下载**：[Releases 便携包](https://github.com/CBlazed/astrbot-model-console/releases/latest) · [使用说明](docs/USAGE.zh-CN.md) · [FAQ](docs/FAQ.zh-CN.md)

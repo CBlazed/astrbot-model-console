@@ -14,6 +14,7 @@
 ### 新增
 
 - 「搜索使用模型」：在模型原生搜索下可指定固定搜索模型（写入 profile 的 `provider_settings.websearch_native_provider_id`，空=跟随当前聊天模型）；插件已同步升级到 v0.2.0 读取该字段。
+- 发布流程：新增 `.github/workflows/release.yml`（推 `v*` tag 即在 windows-latest 上跑测试、构建便携包并发布 Release）与 `scripts/release-notes.mjs`（按「上一个 tag → 本次版本」从 CHANGELOG 生成发布说明）；发布说明缺失时构建失败，不发出空 Release。
 - 测试 **330 项**（新增搜索模型字段、原生搜索测试客户端、Key 确认交互契约、DeepSeek Key 测试文案等）。
 
 ## 0.2.0 — 2026-10-30

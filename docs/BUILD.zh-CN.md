@@ -179,3 +179,26 @@ docs/BUILD.zh-CN.md
 
 > 分发建议：直接发 zip，附上 `SHA256SUMS.txt` 或构建输出里的 zip sha256。这是简单工具，解压即用即可，
 > 不要为它引入安装器或自动更新流程。
+
+## 8. 在 GitHub Actions 上构建并发布（CI）
+
+正式发布的便携包由 CI 构建，不在个人机器上打包：`.github/workflows/release.yml` 在推送 `v*` tag 时
+于 `windows-latest` 上跑测试 → 校验 `package.json` 版本与 tag 一致 → 构建 zip → 生成发布说明 →
+创建（或更新）GitHub Release。
+
+```powershell
+git tag v0.2.1
+git push origin v0.2.1
+```
+
+CI 会：
+
+1. `node --test --test-isolation=none`（测试不过不发版）；
+2. 校验 tag 与 `package.json` 的 `version` 一致，不一致直接失败；
+3. `node scripts/build-package.mjs --zip` 在 CI 的 Node 上生成便携包；
+4. 用 `scripts/release-notes.mjs` 从 `CHANGELOG.md` 提取「上一个 tag → 本次版本」区间作为发布说明；
+5. 上传 `AstrBotModelConsole-<version>-win-x64.zip` 与同名 `.sha256.txt` 两个资产。
+
+`gh run watch` 可以看到进度；手工补发时先保证 tag 已存在，再用 `workflow_dispatch` 重跑（资产按
+`--clobber` 覆盖，不会产生重复 Release）。发布说明缺失（CHANGELOG 里没有对应版本段）会直接失败，
+不允许发出空 Release。
