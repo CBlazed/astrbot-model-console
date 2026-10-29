@@ -1,0 +1,6 @@
+state/
+node_modules/
+*.log
+.tmp-*
+# 冒烟/巡检脚本只用 node .mjs；不要往项目里放 .ps1（AV 会按木马启发式拦截隐藏窗口+token 类脚本）
+*.ps1
