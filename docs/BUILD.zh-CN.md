@@ -88,8 +88,9 @@ zip 内顶层就是 `AstrBotModelConsole\` 目录，解压后双击 `start.cmd` 
 
 `start.cmd` 只使用包内的 `node.exe`，所以目标机器**不需要预装 Node.js**。
 
-首次启动会尝试自动发现 AstrBot 的 data 目录；失败时按窗口提示设置 `ASTRBOT_DATA`。状态目录默认跟随
-AstrBot 数据目录管理，也可以用 `MODEL_CONSOLE_STATE` 指定到独立目录。
+首次启动会尝试自动发现 AstrBot 的 data 目录；失败时按窗口提示设置 `ASTRBOT_DATA`。状态目录默认在
+`%LOCALAPPDATA%\AstrBotModelConsole\state`；若该位置不可写（安全软件拦截、便携盘策略），程序会自动改用
+**包目录下的 `state\`** 并打印警告，也可用 `MODEL_CONSOLE_STATE` 指定到独立目录。
 
 ### 命令行启动
 

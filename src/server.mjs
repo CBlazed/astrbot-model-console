@@ -13,8 +13,8 @@ import {HttpGatewayAdapter} from './http-adapter.mjs';
 import {addDevice,getSecret,listDevices,loadRegistry,migrateSecrets,removeDevice,validateDevice} from './devices.mjs';
 import * as backupModule from './backup.mjs';
 import {logDiagnostic,readDiagnostics} from './diagnostics.mjs';
-import {ASTRBOT_DATA_REQUIRED,discoverAstrBotData,findLegacyState,resolveStateDir} from './config.mjs';
-import {ANOTHER_INSTANCE_RUNNING,acquireLock} from './lock.mjs';
+import {ASTRBOT_DATA_REQUIRED,STATE_DIR_NOT_WRITABLE,discoverAstrBotData,ensureWritableStateDir,findLegacyState} from './config.mjs';
+import {ANOTHER_INSTANCE_RUNNING,LOCK_UNAVAILABLE,acquireLock} from './lock.mjs';
 const publicRoot=fileURLToPath(new URL('../public/',import.meta.url));
 const assets=new Map([['/',['index.html','text/html']],['/index.html',['index.html','text/html']],['/app.mjs',['app.mjs','text/javascript']],['/ui-state.mjs',['ui-state.mjs','text/javascript']],['/styles.css',['styles.css','text/css']]]);
 
@@ -644,12 +644,26 @@ async function migrateDeviceSecrets(stateDir){
  * SIGINT/SIGTERM.
  */
 export async function start({env=process.env,cwd=process.cwd(),argv=process.argv}={}){
-  const stateDir=resolveStateDir(env);
+  let resolvedState;
+  try{resolvedState=await ensureWritableStateDir(env,{cwd});}catch(error){
+    if(error.code!==STATE_DIR_NOT_WRITABLE)throw error;
+    console.error(error.message);
+    process.exitCode=1;
+    return null;
+  }
+  const stateDir=resolvedState.dir;
+  if(resolvedState.fallback)console.error(`警告：默认状态目录不可写（可能被安全软件或目录权限拦截），已改用程序目录状态目录：${stateDir}。如需固定位置请设置 MODEL_CONSOLE_STATE。`);
   const legacy=join(cwd,'state');
   const legacyHint=await findLegacyState(cwd);
   if(legacyHint&&resolve(stateDir)!==resolve(legacy))console.error(legacyHint);
   let lock;
   try{lock=await acquireLock(stateDir,{port:Number(env.MODEL_CONSOLE_PORT??0)});}catch(error){
+    if(error.code===LOCK_UNAVAILABLE){
+      console.error(error.message);
+      console.error('请检查状态目录写权限，或手动删除残留锁文件后重试。');
+      process.exitCode=1;
+      return null;
+    }
     if(error.code!==ANOTHER_INSTANCE_RUNNING)throw error;
     console.error(error.message);
     console.error('请复用第一个实例已打开的窗口，或先关闭旧实例再启动。');
@@ -710,4 +724,9 @@ export async function start({env=process.env,cwd=process.cwd(),argv=process.argv
   }
 }
 
-if(process.argv[1]&&fileURLToPath(import.meta.url)===resolve(process.argv[1]))start().catch(()=>{console.error('Startup failed; verify local paths and Node version.');process.exitCode=1;});
+if(process.argv[1]&&fileURLToPath(import.meta.url)===resolve(process.argv[1]))start().catch(error=>{
+  const code=typeof error?.code==='string'?error.code:'ERROR';
+  console.error(`Startup failed (${code}): ${error?.message??error}`);
+  console.error('请检查 AstrBot data 目录、状态目录写权限（可用 MODEL_CONSOLE_STATE 指定）与 Node 版本（>=24.22）。');
+  process.exitCode=1;
+});

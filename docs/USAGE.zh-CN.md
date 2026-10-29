@@ -153,6 +153,8 @@ $env:MODEL_CONSOLE_STATE = 'D:\AstrBotModelConsole\state'
 
 默认：`%LOCALAPPDATA%\AstrBotModelConsole\state\`（无 `LOCALAPPDATA` 时退到系统临时目录）。
 
+> **自动回退**：如果默认目录不可写（安全软件拦截、便携盘/工作区策略把 `node.exe` 对 AppData 的写入挡掉等），启动时会自动改用**程序目录下的 `state\`**，并在窗口打印「已改用程序目录状态目录」警告。回退后用户数据跟着程序目录走；升级替换目录前请先备份该 `state\`。用 `MODEL_CONSOLE_STATE` 显式指定时不会静默回退：不可写就报 `STATE_DIR_NOT_WRITABLE`。
+
 | 文件/目录 | 内容 |
 |---|---|
 | `backups\<uuid>\` | 每次保存前的备份（配置 JSON + `data_v4.db` 拷贝 + `manifest.json`） |
@@ -367,6 +369,8 @@ node src/agent.mjs --port=0 --state D:\AstrBotModelConsole-agent
 | 双击 `start.cmd` 闪退 / 提示 `node.exe is missing` | 包不完整 / 只拷贝了部分文件 | 重新解压完整包；核对 `SHA256SUMS.txt` |
 | 启动提示 `ANOTHER_INSTANCE_RUNNING` | 同一状态目录已有存活实例 | 复用已打开的窗口，或先关闭旧实例；确认没有残留进程后再启动 |
 | 启动提示 `ASTRBOT_DATA_REQUIRED` | 未设 `ASTRBOT_DATA` 且自动发现到 0 个或多个 data 目录 | 用环境变量指定唯一的 data 目录（见 4.2）后重启 |
+| 启动报 `STATE_DIR_NOT_WRITABLE` / `EPERM`（状态目录不可写） | `%LOCALAPPDATA%` 被安全软件或策略拦截，或显式 `MODEL_CONSOLE_STATE` 指向不可写路径 | 默认会自动回退到程序目录 `state\`（看窗口警告）；显式指定的需改到可写目录，或删除该变量 |
+| 启动报 `LOCK_UNAVAILABLE`（锁文件无法清理） | 残留 `instance.lock` 被杀软/索引服务短暂占用，或状态目录不可写 | 等几秒重试；仍失败则手动删除状态目录下的 `instance.lock` 后重试 |
 | 启动报 `INVALID_SESSION_TOKEN` | 手设了 `MODEL_CONSOLE_SESSION_TOKEN` 但格式不对 | 删除该变量；或使用 64 位小写 hex |
 | 固定端口启动失败 | `MODEL_CONSOLE_PORT` 指定的端口被占用 | 删除该变量改用随机端口，或换一个端口 |
 | 浏览器没自动弹出 | 非 Windows 环境 / 系统未响应 `Start-Process` / 浏览器关联异常 | 手动复制窗口打印的 `url` 到浏览器打开 |

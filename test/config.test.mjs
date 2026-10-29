@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,rm,stat} from 'node:fs/promises';
+import {mkdtemp,mkdir,rm,stat,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
-import {resolveStateDir,discoverAstrBotData,findLegacyState,ASTRBOT_DATA_REQUIRED} from '../src/config.mjs';
+import {resolveStateDir,ensureWritableStateDir,discoverAstrBotData,findLegacyState,ASTRBOT_DATA_REQUIRED,STATE_DIR_NOT_WRITABLE} from '../src/config.mjs';
 
 const isDirectory=async path=>{try{return (await stat(path)).isDirectory();}catch{return false;}};
 async function temp(){return mkdtemp(join(tmpdir(),'model-console-config-'));}
@@ -68,5 +68,60 @@ test('legacy ./state is reported once, never migrated or deleted',async()=>{
     assert.match(hint,/MODEL_CONSOLE_STATE/);
     assert.ok(hint.includes(legacy));
     assert.equal(await isDirectory(legacy),true);
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('writable default state dir is used as-is',async()=>{
+  const root=await temp();
+  try{
+    const local=join(root,'local');
+    await mkdir(local,{recursive:true});
+    const resolved=await ensureWritableStateDir({LOCALAPPDATA:local},{cwd:join(root,'app')});
+    assert.equal(resolved.dir,join(local,'AstrBotModelConsole','state'));
+    assert.equal(resolved.fallback,false);
+    assert.equal(await isDirectory(resolved.dir),true);
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('unwritable default state dir falls back to <cwd>/state (portable state)',async()=>{
+  const root=await temp();
+  try{
+    const local=join(root,'local');
+    await mkdir(local,{recursive:true});
+    // A file where the parent directory should be makes mkdir(<local>/AstrBotModelConsole/state) fail.
+    await writeFile(join(local,'AstrBotModelConsole'),'blocked','utf8');
+    const cwd=join(root,'app');
+    await mkdir(cwd,{recursive:true});
+    const resolved=await ensureWritableStateDir({LOCALAPPDATA:local},{cwd});
+    assert.equal(resolved.dir,join(cwd,'state'));
+    assert.equal(resolved.fallback,true);
+    assert.equal(await isDirectory(resolved.dir),true);
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('explicit MODEL_CONSOLE_STATE must be writable and never falls back silently',async()=>{
+  const root=await temp();
+  try{
+    const blocked=join(root,'blocked');
+    await writeFile(blocked,'file','utf8');
+    await assert.rejects(
+      ()=>ensureWritableStateDir({MODEL_CONSOLE_STATE:blocked},{cwd:join(root,'app')}),
+      error=>error.code===STATE_DIR_NOT_WRITABLE&&/MODEL_CONSOLE_STATE/.test(error.message),
+    );
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('no writable state dir reports STATE_DIR_NOT_WRITABLE with the tried paths',async()=>{
+  const root=await temp();
+  try{
+    const local=join(root,'local');
+    await mkdir(local,{recursive:true});
+    await writeFile(join(local,'AstrBotModelConsole'),'blocked','utf8');
+    const cwd=join(root,'blocked-cwd');
+    await writeFile(cwd,'file','utf8');
+    await assert.rejects(
+      ()=>ensureWritableStateDir({LOCALAPPDATA:local},{cwd}),
+      error=>error.code===STATE_DIR_NOT_WRITABLE&&/已尝试/.test(error.message)&&/MODEL_CONSOLE_STATE/.test(error.message),
+    );
   }finally{await rm(root,{recursive:true,force:true});}
 });

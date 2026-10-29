@@ -1,10 +1,12 @@
-/** Single-instance lock. One state directory belongs to one live Model Console process. */
+﻿/** Single-instance lock. One state directory belongs to one live Model Console process. */
 import {mkdir,readFile,rename,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
 export const ANOTHER_INSTANCE_RUNNING='ANOTHER_INSTANCE_RUNNING';
+export const LOCK_UNAVAILABLE='LOCK_UNAVAILABLE';
 
 const lockFileName='instance.lock';
+const delay=ms=>new Promise(resolveDelay=>setTimeout(resolveDelay,ms));
 const isAlive=pid=>{
   if(!Number.isInteger(pid)||pid<=0)return false;
   try{process.kill(pid,0);return true;}catch(error){return error.code==='EPERM';}
@@ -34,15 +36,33 @@ export async function acquireLock(stateDir,{port=0}={}){
       await writeFile(path,content(),{encoding:'utf8',flag:'wx'});
       return makeHandle(path,startedAt);
     }catch(error){
-      if(error.code!=='EEXIST')throw error;
+      if(error.code!=='EEXIST'){
+        // EPERM/EACCES/EISDIR here mean the state directory or lock path is not usable, not "already running".
+        if(['EPERM','EACCES','EISDIR','ERR_FS_EISDIR'].includes(error.code))throw unavailableError(path,error);
+        throw error;
+      }
       const current=await readLock(path);
       if(current&&isAlive(current.pid))throw runningError(current,path);
-      await rm(path,{force:true});
+      // Stale lock: antivirus/indexers can briefly hold the file, so retry the removal before giving up.
+      let removed=false;
+      for(let retry=0;retry<5&&!removed;retry++){
+        try{await rm(path,{force:true});removed=true;}
+        catch(removeError){
+          if(!['EPERM','EACCES','EBUSY','ERR_FS_EISDIR'].includes(removeError.code))throw removeError;
+          await delay(100);
+        }
+      }
+      if(!removed)throw unavailableError(path);
     }
   }
-  const error=Error('LOCK_UNAVAILABLE: 无法获取实例锁，请重试。');
-  error.code='LOCK_UNAVAILABLE';
-  throw error;
+  throw unavailableError(path);
+}
+
+function unavailableError(path,cause){
+  const error=Error(`LOCK_UNAVAILABLE: 无法获取实例锁 ${path}（可能被杀软/索引服务占用，或状态目录不可写）。请关闭占用进程或手动删除该文件后重试。`);
+  error.code=LOCK_UNAVAILABLE;
+  if(cause?.code)error.details={cause:cause.code};
+  return error;
 }
 
 function makeHandle(path,startedAt){

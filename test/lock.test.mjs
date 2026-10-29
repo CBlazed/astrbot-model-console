@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {acquireLock,ANOTHER_INSTANCE_RUNNING} from '../src/lock.mjs';
+import {acquireLock,ANOTHER_INSTANCE_RUNNING,LOCK_UNAVAILABLE} from '../src/lock.mjs';
 
 const readLock=async state=>JSON.parse(await readFile(join(state,'instance.lock'),'utf8'));
 async function temp(){return mkdtemp(join(tmpdir(),'model-console-lock-'));}
@@ -62,5 +62,16 @@ test('release never deletes a lock owned by a different live process',async()=>{
     await writeFile(join(state,'instance.lock'),JSON.stringify(foreign),'utf8');
     await lock.release();
     assert.equal((await readLock(state)).port,9999);
+  }finally{await rm(state,{recursive:true,force:true});}
+});
+
+test('unusable lock path raises LOCK_UNAVAILABLE instead of a raw filesystem error',async()=>{
+  const state=await temp();
+  try{
+    await mkdir(join(state,'instance.lock'),{recursive:true});
+    await assert.rejects(
+      ()=>acquireLock(state,{port:0}),
+      error=>error.code===LOCK_UNAVAILABLE&&/LOCK_UNAVAILABLE/.test(error.message)&&/状态目录不可写|占用/.test(error.message),
+    );
   }finally{await rm(state,{recursive:true,force:true});}
 });

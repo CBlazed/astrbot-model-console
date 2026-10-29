@@ -277,6 +277,44 @@ test('start() wires diagnostics, backup functions and health paths from a tempor
   }
 });
 
+test('start() falls back to <cwd>/state when the default state dir is not writable',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'model-console-fallback-'));
+  const data=join(root,'data');
+  const cwd=join(root,'app');
+  const savedExit=process.exitCode;
+  const originalLog=console.log;
+  const originalError=console.error;
+  const printed=[];
+  const errors=[];
+  console.log=(...args)=>printed.push(args.join(' '));
+  console.error=(...args)=>errors.push(args.join(' '));
+  let server;
+  try{
+    await mkdir(join(data,'config'),{recursive:true});
+    await writeFile(join(data,'cmd_config.json'),'{}','utf8');
+    await mkdir(cwd,{recursive:true});
+    // A file where %LOCALAPPDATA%\AstrBotModelConsole should be makes the default state dir unwritable.
+    await writeFile(join(root,'AstrBotModelConsole'),'blocked','utf8');
+    server=await start({env:{LOCALAPPDATA:root,ASTRBOT_DATA:data,USERPROFILE:join(root,'profile')},cwd,argv:[]});
+    assert.ok(server);
+    const line=JSON.parse(printed.at(-1));
+    const match=/^http:\/\/127\.0\.0\.1:(\d+)\/#token=([a-f0-9]{64})$/.exec(line.url);
+    assert.ok(match,line.url);
+    const response=await fetch(`http://127.0.0.1:${match[1]}/health`,{headers:{Authorization:`Bearer ${match[2]}`}});
+    assert.equal(response.status,200);
+    const body=await response.json();
+    assert.equal(body.stateDir,join(cwd,'state'));
+    assert.equal(body.dataPath,data);
+    assert.ok(errors.some(text=>/已改用程序目录状态目录/.test(text)),errors.join('\n'));
+  }finally{
+    if(server)await new Promise(resolve=>server.close(resolve));
+    console.log=originalLog;
+    console.error=originalError;
+    process.exitCode=savedExit;
+    await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});
+  }
+});
+
 const BACKUP_UUID='0243f684-e8ed-44ac-8c95-657df32890aa';
 const RESOURCE_PLAN_ID='0f8fad5b-d9cb-469f-a165-70867728950e';
 test('provider resource ids may contain "/" while traversal and path-like ids stay 400',()=>fixture(async({base,engine})=>{

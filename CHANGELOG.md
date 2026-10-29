@@ -2,6 +2,19 @@
 
 本项目版本号取自 `package.json` 的 `version`。
 
+## 0.1.1 — 2026-10-29
+
+### 修复
+
+- 启动失败不再只打印 `Startup failed; verify local paths and Node version.`：现在输出真实错误码与信息（如 `EPERM`、`STATE_DIR_NOT_WRITABLE`、`LOCK_UNAVAILABLE`），并提示检查状态目录写权限。
+- 状态目录启动预检与自动回退：默认 `%LOCALAPPDATA%\AstrBotModelConsole\state` 不可写时（安全软件/工作区策略拦截 `node.exe` 写 AppData、便携盘策略等），自动改用**程序目录下的 `state\`** 并打印警告；显式 `MODEL_CONSOLE_STATE` 不可写时报 `STATE_DIR_NOT_WRITABLE`，不静默改路径。
+- 残留 `instance.lock` 清理增加重试（杀软/索引服务短暂占用）；仍失败报 `LOCK_UNAVAILABLE` 并提示手动删除，不再抛裸 `EPERM`。
+- 新增 6 项测试（状态目录回退、显式目录失败、锁路径不可用、`start()` 回退集成），共 **296 项**。
+
+### 已知限制
+
+- 回退到程序目录 `state/` 后，升级替换目录会连带旧状态；升级前先备份 `state/`。
+
 ## 0.1.0 — 2026-10-29
 
 首个可用版本。

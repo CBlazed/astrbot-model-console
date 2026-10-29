@@ -270,7 +270,7 @@ node scripts/build-package.mjs [--zip]
 | 变量/参数 | 作用 |
 |---|---|
 | ASTRBOT_DATA | 可选；优先使用。未设置时扫描 `%USERPROFILE%\.astrbot_launcher\instances\*\core\data` 与 `%USERPROFILE%\.astrbot\data`，唯一命中才自动使用，多个/零个报 `ASTRBOT_DATA_REQUIRED`。两个 cmd 脚本不再写死路径。 |
-| MODEL_CONSOLE_STATE | 备份/审计/锁目录；默认 `%LOCALAPPDATA%\AstrBotModelConsole\state`，无 LOCALAPPDATA 时用系统临时目录。项目内旧 `state/` 只提示、不迁移。 |
+| MODEL_CONSOLE_STATE | 备份/审计/锁目录；默认 `%LOCALAPPDATA%\AstrBotModelConsole\state`，无 LOCALAPPDATA 时用系统临时目录。启动前探测可写性：默认目录不可写（安全软件/工作区策略拦截 node 写 AppData）时回退到 `<cwd>/state` 并打印警告；显式指定则不可写即报 `STATE_DIR_NOT_WRITABLE`，不静默迁移。项目内旧 `state/` 只提示、不迁移。 |
 | MODEL_CONSOLE_PORT | 默认0，操作系统分配随机回环端口 |
 | MODEL_CONSOLE_SESSION_TOKEN | 可选、64位小写hex；仅受控重启保留现有工具会话使用，普通启动不设置 |
 | MODEL_CONSOLE_BACKUP_KEEP | 备份保留份数，默认10；只清理含 manifest.json 的 UUID 目录，绝不动最新一份 |
@@ -279,7 +279,7 @@ node scripts/build-package.mjs [--zip]
 | `node src/agent.mjs --enable-writes` | 远程 Agent 允许 Hub 计划/应用/备份；不加则只读 |
 | `--open` | Windows打开带本次工具令牌的浏览器地址 |
 
-单实例：启动时在状态目录写 `instance.lock`（pid/监听端口/启动时间）。已有存活实例时第二个进程打印 `ANOTHER_INSTANCE_RUNNING`、pid/端口并以退出码 1 结束；进程崩溃留下的锁会在下次启动时按“pid 不存活”自动清理。SIGINT/SIGTERM 会释放锁并关闭服务。
+单实例：启动时在状态目录写 `instance.lock`（pid/监听端口/启动时间）。已有存活实例时第二个进程打印 `ANOTHER_INSTANCE_RUNNING`、pid/端口并以退出码 1 结束；进程崩溃留下的锁会在下次启动时按“pid 不存活”自动清理。清理残留锁会重试 5 次（杀软/索引服务可能短暂占用）；仍失败时报 `LOCK_UNAVAILABLE` 并提示手动删除锁文件，不再抛裸 EPERM。SIGINT/SIGTERM 会释放锁并关闭服务。
 
 当前曾使用56520端口；端口和PID都是运行记录，不是永久配置。自定义后台启动会写 state/active-service.json，索引stdout/stderr与PID；普通cmd启动没有更新该索引的逻辑，因此它可能过期，不能不核实就杀其中PID。
 
@@ -335,6 +335,8 @@ node scripts/build-package.mjs [--zip]
 | CONSOLE_UNREACHABLE | 本工具进程与端口，再查启动stderr；不等于AstrBot已停 |
 | ASTRBOT_DATA_REQUIRED | 未设置 ASTRBOT_DATA 且自动发现到 0 个或多个 data 目录；按提示用环境变量指定，不要猜 |
 | ANOTHER_INSTANCE_RUNNING | 同一状态目录已有存活实例；复用其窗口或先关闭旧实例。锁文件在状态目录 `instance.lock`，pid 不存活时下次启动会自动清理 |
+| STATE_DIR_NOT_WRITABLE / EPERM | 状态目录不可写：默认目录被安全软件/策略拦截，或显式 `MODEL_CONSOLE_STATE` 指向不可写路径；看启动窗口警告与实际使用的 `stateDir`（`/health` 也返回） |
+| LOCK_UNAVAILABLE | 残留锁文件无法清理（杀软/索引服务占用）或状态目录不可写；等几秒重试，仍失败手动删除 `instance.lock` |
 | ASTRBOT_UNREACHABLE | 实例是否启动、最新启动日志、管理端口；不是QQ端口 |
 | REQUEST_TIMEOUT | 若在保存中，先回读确认结果；不要直接重复提交 |
 | CONCURRENT_CHANGE | 外部修改或草稿基线过期，核对差异后重新编辑 |
