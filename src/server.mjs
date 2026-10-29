@@ -119,7 +119,7 @@ const PROVIDER_RESOURCE_ID=/^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 
 /**
  * Validate a {kind,id} resource reference for restore/diff routes.
- * profile/plugin keep the strict charset. Provider ids may contain "/" (e.g. <provider>/<model>),
+ * profile/plugin keep the strict charset. Provider ids may contain "/" (e.g. example-provider/model-a),
  * but traversal, backslashes, colons, empty segments, leading/trailing slashes and >200 chars are rejected.
  */
 function parseResource(value){

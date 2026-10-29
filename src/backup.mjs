@@ -135,7 +135,7 @@ async function enforceByteLimit(dest,{protect,maxBytes,onWarning}){
 }
 
 /**
- * AstrBot provider ids may contain "/" (e.g. <provider>/<model>), so provider ids are validated as
+ * AstrBot provider ids may contain "/" (e.g. example-provider/model-a), so provider ids are validated as
  * a logical id, never as a path: no traversal/drive/backslash/empty segments, bounded length. Providers are
  * still looked up inside cmd_config.json's provider array, so no user input is joined into a file path.
  */

@@ -75,7 +75,7 @@ async function probeWritable(dir){
  * Resolve a state directory that is actually writable at startup.
  *
  * Portable packages often live on drives/paths where security software or HIPS rules block writes
- * to %LOCALAPPDATA% (observed on this machine: node.exe under <workspace> cannot write AppData).
+ * to %LOCALAPPDATA% (some HIPS/sandbox setups block node.exe from writing AppData).
  * In that case the console falls back to <cwd>/state ("portable state") and reports it.
  *
  * - MODEL_CONSOLE_STATE explicit: must be writable, otherwise STATE_DIR_NOT_WRITABLE (never moved silently).

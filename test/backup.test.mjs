@@ -250,8 +250,8 @@ test('MODEL_CONSOLE_BACKUP_MAX_MB defaults to 2048 MiB and ignores invalid value
 async function createSlashProviderData(root){
   const data=join(root,'data');
   await mkdir(join(data,'config'),{recursive:true});
-  await writeFile(join(data,'cmd_config.json'),JSON.stringify({dashboard:{},provider:[{id:'<provider>/<model>',model:'m1'},{id:'deepseek/<model>',model:'m2'}]}));
-  await writeFile(join(data,'config','plugin_config.json'),JSON.stringify({decision_ai_provider_id:'<provider>/<model>'}));
+  await writeFile(join(data,'cmd_config.json'),JSON.stringify({dashboard:{},provider:[{id:'example-provider/model-a',model:'m1'},{id:'deepseek/model-a',model:'m2'}]}));
+  await writeFile(join(data,'config','plugin_config.json'),JSON.stringify({decision_ai_provider_id:'example-provider/model-a'}));
   const db=new DatabaseSync(join(data,'data_v4.db'));
   db.exec('CREATE TABLE sample(value TEXT)');
   db.close();
@@ -264,10 +264,10 @@ test('provider ids may contain slashes but traversal-shaped ids are rejected',as
     const data=await createSlashProviderData(root);
     const dest=join(root,'backups');
     const backupId=basename(await backupState(data,dest));
-    const slashProvider=await readBackupResource(dest,backupId,{kind:'provider',id:'<provider>/<model>'});
+    const slashProvider=await readBackupResource(dest,backupId,{kind:'provider',id:'example-provider/model-a'});
     assert.equal(slashProvider.file,'cmd_config.json');
     assert.equal(slashProvider.config.model,'m1');
-    assert.equal((await readBackupResource(dest,backupId,{kind:'provider',id:'deepseek/<model>'})).config.model,'m2');
+    assert.equal((await readBackupResource(dest,backupId,{kind:'provider',id:'deepseek/model-a'})).config.model,'m2');
     const invalid=async run=>assert.rejects(run,error=>error.code==='RESTORE_BACKUP_INVALID');
     for(const id of ['../x','a/../../b','a\\b','C:/x','/x','x/','a//b','x'.repeat(201)])await invalid(()=>readBackupResource(dest,backupId,{kind:'provider',id}));
     for(const resource of [{kind:'profile',id:'../x'},{kind:'profile',id:'bad/id'},{kind:'plugin',id:'../evil'},{kind:'plugin',id:'a\\b'}])await invalid(()=>readBackupResource(dest,backupId,resource));
@@ -284,11 +284,11 @@ test('slash provider ids flow through engine backupDiff, planRestore and apply',
     const backed=JSON.parse(await readFile(backedPath,'utf8'));
     backed.provider[0].custom_extra_body={reasoning_effort:'max'};
     await writeFile(backedPath,JSON.stringify(backed));
-    let provider={id:'<provider>/<model>',model:'m1',custom_extra_body:{reasoning_effort:'low'}};
+    let provider={id:'example-provider/model-a',model:'m1',custom_extra_body:{reasoning_effort:'low'}};
     const writes=[];
     const gateway={read:async()=>structuredClone(provider),write:async(resource,value)=>{writes.push({resource,value});provider=structuredClone(value);},efforts:async()=>['low','max']};
     const engine=new Engine({gateway,writeEnabled:true,backup:async()=>'backup',backups:{list:()=>listBackups(dest),read:(id,res)=>readBackupResource(dest,id,res)}});
-    const resource={kind:'provider',id:'<provider>/<model>'};
+    const resource={kind:'provider',id:'example-provider/model-a'};
     assert.equal((await engine.listBackups()).length,1);
     const diff=await engine.backupDiff(backupId,resource);
     assert.deepEqual(diff.changes,[{path:'custom_extra_body.reasoning_effort',before:'low',value:'max',capability:'llm'}]);

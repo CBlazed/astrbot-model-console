@@ -2,6 +2,19 @@
 
 本项目版本号取自 `package.json` 的 `version`。
 
+## 0.2.2 — 2026-10-30
+
+### 安全
+
+- 仓库隐私清理：源码、文档、测试与**全部提交历史**中不再包含本机绝对路径、AstrBot 实例/profile UUID、机器人实例名与人格名、私有反代 provider/模型别名、本机 dashboard 端口与仓库外工作记录路径。远端历史已重写（旧提交 SHA 全部失效），旧 Release 产物已删除。
+- 界面截图不再入库：原截图带出本机临时路径，已从当前树与历史中移除；README 与 HANDOVER 的说明同步更新，`§9.4` 测试保留 DOM 契约、去掉截图断言。
+- `src/identity.mjs` 移除针对具体平台实例名的特例，类别改由 `type` 派生；测试里的真实 bot/实例名换成通用示例。
+- `test/epic2-integration.test.mjs` 不再硬编码本机 `ASTRBOT_DATA` 兜底路径，未设置环境变量时跳过真实值扫描。
+
+### 测试
+
+- 332 项全绿（full-access 下 DPAPI 两项不再 skip）。
+
 ## 0.2.1 — 2026-10-30
 
 ### 修复

@@ -1,6 +1,6 @@
 {
   "name": "astrbot-model-console",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "本机优先的 AstrBot 模型配置可视化编辑器：预览后应用、写入前备份，支持 HTTP/SSH/Agent 远程设备。",
   "type": "module",

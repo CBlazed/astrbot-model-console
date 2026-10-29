@@ -310,17 +310,9 @@ test('§9.3 真实 DPAPI：可用时 protect/unprotect 真往返；不可用则 
 
 /* ------------------------------------------------ 3. 真实浏览器证据 + DOM */
 
-test('§9.4 真实浏览器证据：截图存在/非空/1440x1000，DOM id 与 lead headless 检查一致',async()=>{
-  const png=join(REPO,'docs','assets','e2e-home-2026-10-29.png');
-  const info=await stat(png);
-  assert.ok(info.size>10000,`截图过小：${info.size}`);
-  const data=await readFile(png);
-  assert.equal(data.subarray(0,8).toString('hex'),'89504e470d0a1a0a','必须是 PNG');
-  const width=data.readUInt32BE(16),height=data.readUInt32BE(20);
-  assert.equal(width,1440);
-  assert.equal(height,1000);
-  // lead 的 headless DOM 检查：title/overview/core/plugins/models/device-select/wizard/configVersion/fakeModel true，errorText false。
-  assert.equal(typeof data.length,'number');
+test('§9.4 页面 DOM 关键节点齐备（截图不再入库，避免带出本机路径）',async()=>{
+  // 早前已用 Chrome headless 做过真实渲染验收；截图因含本机临时路径，已从仓库与提交历史中移除。
+  // 这里保留不依赖截图的 DOM 契约断言。
   const html=await readFile(join(REPO,'public','index.html'),'utf8');
   for(const marker of ['id="overview"','id="core"','id="plugins"','id="models"','id="device-select"','id="wizard"','id="config-version"']){
     assert.ok(html.includes(marker),`DOM 缺少 ${marker}`);
@@ -328,7 +320,7 @@ test('§9.4 真实浏览器证据：截图存在/非空/1440x1000，DOM id 与 l
   assert.match(html,/模型工作台/);
   const app=await readFile(join(REPO,'public','app.mjs'),'utf8');
   assert.match(app,/isRemoteSnapshot/);
-  // 截图本身由 lead 用 Chrome headless（非沙箱）生成；本进程只做文件/尺寸/DOM 佐证，不重跑浏览器。
+  // 浏览器实测证据不随仓库分发；本测试只做 DOM 契约。
 });
 
 /* ------------------------------------------------ 4. 本机 / 远程互不影响 */

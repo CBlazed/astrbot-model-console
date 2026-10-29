@@ -39,7 +39,7 @@
 
 | 约束 | 证据 | 设计含义 |
 |---|---|---|
-| dashboard 实际绑定由环境变量决定，且每次随机 | 本机 `cmd_config.json` 写 `0.0.0.0:6185`，日志实际 `127.0.0.1:<随机端口>/22851/22656`；AstrBot `dashboard/server.py` 中 `DASHBOARD_HOST/PORT` 优先于配置（PR #10095） | **不能**从远端配置推 URL；本地仍从日志取；远程要么用户显式给 baseUrl，要么 Agent 上报 |
+| dashboard 实际绑定由环境变量决定，且每次随机 | 本机 `cmd_config.json` 写 `0.0.0.0:6185`，日志实际 `127.0.0.1:<随机端口>`；AstrBot `dashboard/server.py` 中 `DASHBOARD_HOST/PORT` 优先于配置（PR #10095） | **不能**从远端配置推 URL；本地仍从日志取；远程要么用户显式给 baseUrl，要么 Agent 上报 |
 | 本机 launcher 强制回环 | 同上 | “直接 HTTP 直连”默认不可用；需要用户显式放开或走隧道/Agent |
 | AstrBot 有官方 OpenAPI Key（`abk_`）与 scope | `dashboard/api/auth.py:167`、`api_key_service.py`、`config_profiles.py:34`、`providers.py:23`、`plugins.py:61`、`bots.py:19` | 远程认证首选 API Key：可撤销、可过期、服务端只存 PBKDF2 哈希，不需要把 `jwt_secret` 带出目标机 |
 | 工具端点是 OpenAPI v1 的一部分 | 现有 `/api/v1/config-profiles`、`/providers/by-id`、`/plugins/config`、`/bots` 均带 scope 依赖 | API Key 需要 `config` + `provider` + `plugin` + `bot` 四个 scope 即可覆盖写路径 |

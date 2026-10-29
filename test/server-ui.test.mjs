@@ -321,26 +321,26 @@ test('provider resource ids may contain "/" while traversal and path-like ids st
   engine.backupDiff=async(backupId,resource)=>({resource,changes:[],currentRevision:'rev'});
   engine.planRestore=async(backupId,resource,expectedRevision)=>({id:RESOURCE_PLAN_ID,resource,changes:[],backupId,expectedRevision});
   const diffUrl=id=>`${base}/backups/${BACKUP_UUID}/diff?kind=provider&id=${encodeURIComponent(id)}`;
-  let response=await fetch(diffUrl('<provider>/<model>'),{headers:auth});
+  let response=await fetch(diffUrl('example-provider/model-a'),{headers:auth});
   assert.equal(response.status,200);
   let body=await response.json();
-  assert.equal(body.resource.id,'<provider>/<model>');
+  assert.equal(body.resource.id,'example-provider/model-a');
   assert.equal(body.backupId,BACKUP_UUID);
   assert.doesNotMatch(JSON.stringify(body),/C:\\|AppData|Users|backups\//i);
   // profile/plugin 维持严格字符集：斜杠仍然拒绝。
-  assert.equal((await fetch(`${base}/backups/${BACKUP_UUID}/diff?kind=profile&id=<provider>%2F<model>`,{headers:auth})).status,400);
+  assert.equal((await fetch(`${base}/backups/${BACKUP_UUID}/diff?kind=profile&id=example-provider%2Fmodel-a`,{headers:auth})).status,400);
   for(const id of ['../x','a/../../b','a\b','C:/x','/leading','trailing/','a//b','x'.repeat(201)]){
     const invalid=await fetch(diffUrl(id),{headers:auth});
     assert.equal(invalid.status,400,id);
     assert.deepEqual(await invalid.json(),{error:'INVALID_RESOURCE'});
   }
   const restoreHeaders={...auth,'Content-Type':'application/json'};
-  const validRestore=await fetch(base+'/restore-plans',{method:'POST',headers:restoreHeaders,body:JSON.stringify({backupId:BACKUP_UUID,resource:{kind:'provider',id:'<provider>/<model>'},expectedRevision:'rev'})});
+  const validRestore=await fetch(base+'/restore-plans',{method:'POST',headers:restoreHeaders,body:JSON.stringify({backupId:BACKUP_UUID,resource:{kind:'provider',id:'example-provider/model-a'},expectedRevision:'rev'})});
   assert.equal(validRestore.status,200);
   body=await validRestore.json();
   assert.equal(body.mode,'restore');
   assert.equal(body.backupId,BACKUP_UUID);
-  assert.equal(body.resource.id,'<provider>/<model>');
+  assert.equal(body.resource.id,'example-provider/model-a');
   for(const id of ['../x','a/../../b','a\b','C:/x']){
     const invalid=await fetch(base+'/restore-plans',{method:'POST',headers:restoreHeaders,body:JSON.stringify({backupId:BACKUP_UUID,resource:{kind:'provider',id}})});
     assert.equal(invalid.status,400,id);

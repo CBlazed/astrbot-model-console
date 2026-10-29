@@ -186,8 +186,8 @@ test('P1-04 GET /backups/:id/diff：只读、字段白名单、非法参数 400�
       assert.equal(response.status,400,bad);
       assert.ok(['INVALID_BACKUP_ID','INVALID_RESOURCE'].includes((await response.json()).error),bad);
     }
-    // provider id 允许 "/"（真实 id 形如 <provider>/<model>），但拒绝路径穿越/反斜杠/盘符/空段。
-    response=await fetch(`${base}/backups/${BACKUP_1}/diff?kind=provider&id=${encodeURIComponent('<provider>/<model>')}`,{headers:AUTH});
+    // provider id 允许 "/"（真实 id 形如 example-provider/model-a），但拒绝路径穿越/反斜杠/盘符/空段。
+    response=await fetch(`${base}/backups/${BACKUP_1}/diff?kind=provider&id=${encodeURIComponent('example-provider/model-a')}`,{headers:AUTH});
     assert.equal(response.status,200);
     for(const badProvider of ['../x','a/../../b','a\\b','C:/x','a//b','/abs','abs/']){
       response=await fetch(`${base}/backups/${BACKUP_1}/diff?kind=provider&id=${encodeURIComponent(badProvider)}`,{headers:AUTH});
@@ -249,10 +249,10 @@ test('P1-04 POST /restore-plans：契约形状、参数校验、409 白名单',a
       assert.equal(response.status,400,JSON.stringify(badBody));
     }
     // 真实 provider id 含 "/"：restore-plans 必须 200，且引擎收到原始 id。
-    const providerPayload={backupId:BACKUP_1,resource:{kind:'provider',id:'<provider>/<model>'},expectedRevision:'rev-1'};
+    const providerPayload={backupId:BACKUP_1,resource:{kind:'provider',id:'example-provider/model-a'},expectedRevision:'rev-1'};
     response=await fetch(base+'/restore-plans',{method:'POST',headers:JSON_HEADERS,body:JSON.stringify(providerPayload)});
     assert.equal(response.status,200);
-    assert.equal(calls.find(call=>call[0]==='planRestore'&&call[2]?.kind==='provider')[2].id,'<provider>/<model>');
+    assert.equal(calls.find(call=>call[0]==='planRestore'&&call[2]?.kind==='provider')[2].id,'example-provider/model-a');
     const failure=Error('RESTORE_BACKUP_NOT_FOUND');
     failure.details={backupId:`C:\\Users\\alice\\backups\\${BACKUP_1}`,token:'abc',path:'/secret'};
     engine.planRestore=async()=>{throw failure;};
@@ -266,7 +266,7 @@ test('P1-04 真实 Engine：planRestore 只列已审查差异、apply 恢复完�
   const resource={kind:'plugin',id:'astrbot_plugin_group_chat_plus'};
   let current={decision_ai_provider_id:'llm-a',unrelated:{keep:true},other:'x'};
   const backupConfig={decision_ai_provider_id:'llm-b',unrelated:{keep:true}};
-  const providerId='<provider>/<model>';
+  const providerId='example-provider/model-a';
   let providerCurrent={id:providerId,custom_extra_body:{reasoning_effort:'low'}};
   const providerBackup={id:providerId,custom_extra_body:{reasoning_effort:'max'}};
   const writes=[],events=[];
@@ -298,7 +298,7 @@ test('P1-04 真实 Engine：planRestore 只列已审查差异、apply 恢复完�
   assert.deepEqual(writes,[{resource,config:backupConfig}]);
   assert.deepEqual(current,backupConfig);
   assert.equal(events.filter(event=>event.event==='applied').length,1);
-  // 真实 provider id 含 "/"（<provider>/<model>）：engine 级 planRestore + apply 必须可用。
+  // 真实 provider id 含 "/"（example-provider/model-a）：engine 级 planRestore + apply 必须可用。
   const providerResource={kind:'provider',id:providerId};
   const providerPlan=await engine.planRestore(BACKUP_1,providerResource);
   assert.equal(providerPlan.mode,'restore');
@@ -538,7 +538,7 @@ test('P1-10/只读核对：旧 state/backups 可列出并可读单个资源，�
   const plugin=await readBackupResource(backupsDir,newest.id,{kind:'plugin',id:'astrbot_plugin_livingmemory'});
   assert.equal(plugin.file,'config/astrbot_plugin_livingmemory_config.json');
   assert.equal(typeof plugin.config,'object');
-  // 真实 AstrBot 的 provider id 含 "/"（如 <provider>/<model>）：修复后必须可读取；
+  // 真实 AstrBot 的 provider id 含 "/"（如 example-provider/model-a）：修复后必须可读取；
   // 但路径穿越/反斜杠/盘符/空段仍按 RESTORE_BACKUP_INVALID 拒绝，profile/plugin 保持严格字符集。
   const realProviderId=(profile.config.provider??[])[0]?.id;
   assert.ok(typeof realProviderId==='string'&&realProviderId.length>0,'真实备份应包含 provider');
@@ -566,7 +566,7 @@ async function backupDataDir(){
   const root=await tempDir();
   const data=join(root,'data');
   await mkdir(join(data,'config'),{recursive:true});
-  await writeFile(join(data,'cmd_config.json'),'{"provider":[{"id":"plain-provider","type":"openai_chat_completion"},{"id":"<provider>/<model>","type":"openai_chat_completion"}]}','utf8');
+  await writeFile(join(data,'cmd_config.json'),'{"provider":[{"id":"plain-provider","type":"openai_chat_completion"},{"id":"example-provider/model-a","type":"openai_chat_completion"}]}','utf8');
   await writeFile(join(data,'config','abconf_test.json'),'{"test":true}','utf8');
   const db=new DatabaseSync(join(data,'data_v4.db'));
   db.exec("CREATE TABLE sample(v TEXT);INSERT INTO sample VALUES('ok')");
@@ -596,8 +596,8 @@ test('P1-10 备份产品化：listBackups/stats/prune 返回值与字节上限�
     const provider=await readBackupResource(dest,listed[0].id,{kind:'provider',id:'plain-provider'});
     assert.equal(provider.file,'cmd_config.json');
     assert.equal(provider.config.id,'plain-provider');
-    const slashProvider=await readBackupResource(dest,listed[0].id,{kind:'provider',id:'<provider>/<model>'});
-    assert.equal(slashProvider.config.id,'<provider>/<model>');
+    const slashProvider=await readBackupResource(dest,listed[0].id,{kind:'provider',id:'example-provider/model-a'});
+    assert.equal(slashProvider.config.id,'example-provider/model-a');
     await assert.rejects(()=>readBackupResource(dest,listed[0].id,{kind:'provider',id:'a/../../b'}),/RESTORE_BACKUP_INVALID/);
     await mkdir(join(dest,'notes'),{recursive:true});
     await writeFile(join(dest,'notes','keep.txt'),'keep','utf8');

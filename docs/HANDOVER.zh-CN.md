@@ -16,7 +16,7 @@
 6. 若目标是“远程多设备”或“打包给其他用户”，先读 2026-10-29 的[缺陷评审](history/REVIEW-2026-10-29.zh-CN.md)与[改造设计](history/DESIGN-multi-device-2026-10-29.zh-CN.md)；两者是历史设计证据，含已废弃的安装器方案，当前行为以源码和本文为准。
 7. 下一轮任务从 [P1/P2 待修复清单](history/BACKLOG-2026-10-29.zh-CN.md) 取，按优先级与验收标准推进；完成一项就更新清单和工作记录。
 
-本项目此前对 bot 身份的错误已纠正。旧工作记录中的“示例旧名称官方 bot”“示例机器人B是 QQ 昵称”等判断不能直接沿用。工作区旧 AGENTS.md 的约束已被用户在会话中明确撤销，不能把文件仍然存在视为重新授权；仍应遵守当前会话和实际执行环境的权限。
+本项目此前对 bot 身份的错误已纠正：旧工作记录里“把某 profile 显示名当成 bot 昵称”这类判断不能直接沿用（那些记录不在本仓库）。工作区旧 AGENTS.md 的约束已被用户在会话中明确撤销，不能把文件仍然存在视为重新授权；仍应遵守当前会话和实际执行环境的权限。
 
 ## 2. 用户目标与实现边界
 
@@ -50,15 +50,15 @@
 
 机器人实例不必有专用 profile。使用 default 的机器人仍必须独立显示，并把修改保存到 default。
 
-本次接手基线（只是已观察实例，不可硬编码到业务逻辑）：
+本次观察到的基线（示例值，实际因部署而异；不可硬编码到业务逻辑）：
 
 | 实例标识 | 实际类型 | 配置目标 | 展示要求 |
 |---|---|---|---|
-| 示例机器人A | `qq_official` | `default` | 独立 QQ 机器人卡片，明确“使用全局默认配置” |
-| onebot | `aiocqhttp` | `<profile-UUID>` | OneBot 卡片，来源是实例与明确路由 |
-| `<unused-profile-UUID>` | 不是独立 bot 的证据 | 未发现关联实例 | 仅作为未使用配置档案；不能拿来代替示例机器人A |
+| `bot-a` | `qq_official` | `default` | 独立 QQ 机器人卡片，明确“使用全局默认配置” |
+| `bot-b` | `aiocqhttp` | `<profile-UUID>` | OneBot 卡片，来源是实例与明确路由 |
+| `<unused-profile-UUID>` | 不是独立 bot 的证据 | 未发现关联实例 | 仅作为未使用配置档案，不能替代 `bot-a` |
 
-历史 profile 显示名“示例旧名称”不构成任何已使用机器人身份的证据。实际 `type` 拼写是 `qq_official`，不是 `qq_offical`。
+历史 profile 显示名（例如“某官方 bot”）不构成任何已使用机器人身份的证据。实际 `type` 拼写是 `qq_official`，不是 `qq_offical`。
 
 ### 3.3 名称证据规则
 
@@ -264,9 +264,9 @@ AstrBot 返回体由 gateway 去掉data外层，并适配 provider/config/info_l
 
 ## 10. 启动与部署
 
-源码目录：`model-console`。
+源码目录：本仓库根目录。
 
-本机 AstrBot DATA（当前部署位置，仅作为示例；启动时按优先级自动发现，见下表）：
+本机 AstrBot DATA（示例；启动时按优先级自动发现，见下表）：
 
 `C:\Users\<你>\.astrbot_launcher\instances\<实例ID>\core\data`
 
@@ -320,7 +320,7 @@ node scripts/build-package.mjs [--zip]
 
 接手运行 `node --test --test-isolation=none`（受限沙箱里 `node --test` 会因 spawn EPERM 失败；正常环境可省略参数）。2026-10-29 最终基线是 **290 项（当前环境 290 pass / 0 fail；受限沙箱会 skip 2 项 DPAPI 测试）**（以当次结果为准）。
 
-2026-10-29 追加：真实 AstrBot 写入已验证（运行中的实例、未使用配置档案的 compression 绑定：plan → apply → snapshot/API/磁盘三方读回 → 恢复 → 再读回，恢复后 revision 与写前一致）。`generationVerified` / `hotLoadVerified` 仍为 false：保存+回读不等于热加载或模型生成验证。证据见上级 `docs/history/2026-10-29-真实AstrBot写入验证.md`。
+2026-10-29 追加：真实 AstrBot 写入已验证（运行中的实例、未使用配置档案的 compression 绑定：plan → apply → snapshot/API/磁盘三方读回 → 恢复 → 再读回，恢复后 revision 与写前一致）。`generationVerified` / `hotLoadVerified` 仍为 false：保存+回读不等于热加载或模型生成验证。证据见 `docs/history/` 与仓库外的工作记录（不随仓库分发）。
 
 | 测试文件 | 重点 |
 |---|---|
@@ -378,7 +378,7 @@ node scripts/build-package.mjs [--zip]
 11. 便携包与 zip 已可构建并验证 SHA；无安装器/自动更新（Epic-3 只做便携 node）。未在无 Node 的干净 Windows 上独立启动验证。
 12. ~~RISK-11：设备 API Key 明文存 `secrets.json`~~ **已修**：Windows DPAPI 加密 `dpapi:`，启动时自动迁移旧明文；DPAPI 不可用时降级明文并在诊断留痕（Hub UI 暂不提示）。真实 SSH/第二台 Windows、干净 Windows 启动、真实 Ctrl+C、DPAPI 多用户/域环境仍未验证。
 13. 远程写仅限 Agent（目标机本地备份/审计 + hotLoad 证据）；HTTP/SSH 只读。`hotLoad.marker` 在 Agent 侧未先脱敏，由 Hub 脱敏。
-14. 真实浏览器已用 Chrome headless 验收（`docs/assets/e2e-home-2026-10-29.png`）；键盘/屏幕阅读器仍缺。
+14. 真实浏览器已用 Chrome headless 验收（截图未入库，避免带出本机路径）；键盘/屏幕阅读器仍缺。
 
 ## 15. 修改后的交付要求
 

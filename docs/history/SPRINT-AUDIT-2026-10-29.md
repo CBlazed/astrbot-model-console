@@ -15,7 +15,7 @@
 - 集成测试：`test/sprint-integration.test.mjs` **20/20 通过**；全量 `node --test --test-isolation=none` **191/191 通过**（审计前基线 168，含 Sprint 新增测试）。
 - 打包：最终源码在临时目录构建成功，产物 **28 个文件 / 89.9 MB**，27 行 SHA-256 校验全部匹配；无 `state/`、`test/`、`scripts/`、`*.log`、`secrets.json`、`devices.json`、`audit.jsonl`、`diagnostics*`、`instance.lock`；不含真实 jwt/API key；安装器脚本使用相对 SourceDir 且不安装 state；打包脚本无隐藏窗口/提权/token 组合。
 - 真实数据只读核对：本机 AstrBot 配置模拟 `bindingRows` 共 **21 行，present 21、present+空值 5、absent 0**（无误报 `field-missing`）；旧 `model-console/state/backups` **15 份 / 33,866,881 字节 / sqlite 全部 ok**，`listBackups`/`readBackupResource` 只读调用前后目录 mtime 不变。
-- 审计中发现并在定稿前修复的真实缺陷：真实 provider id 含 `/`（如 `<provider>/<model>`）导致 engine 级 `readBackupResource` 与 HTTP `/backups/:id/diff`、`/restore-plans` 不可用。修复后已按最终契约重验 200/放行，并保留对 `../x`、`a/../../b`、`a\b`、`C:/x`、`a//b`、`/abs`、`abs/`、>200 的 400 拒绝。
+- 审计中发现并在定稿前修复的真实缺陷：真实 provider id 含 `/`（如 `example-provider/model-a`）导致 engine 级 `readBackupResource` 与 HTTP `/backups/:id/diff`、`/restore-plans` 不可用。修复后已按最终契约重验 200/放行，并保留对 `../x`、`a/../../b`、`a\b`、`C:/x`、`a//b`、`/abs`、`abs/`、>200 的 400 拒绝。
 
 ## 1. 环境与命令
 
@@ -78,7 +78,7 @@ BUILD_SKIP_STATE true             # SKIP_NAMES 含 'state'
 
 1. **AstrBot 配置 → bindingRows**（`discoverAstrBotData(process.env)` → `C:\Users\<你>\.astrbot_launcher\instances\<实例ID>-…\core\data`；profile default + group_chat_plus/livingmemory/self_learning/meme_manager）：
    - `{"rows":21,"present":21,"empty":5,"absent":0}`；present 字段 **0 次**被误报为 `field-missing`；5 个 present+空值（stt/tts/rerank 等）均为 `empty-semantics-unverified`；present+`inherit:'session'` 的 `decision_ai_provider_id` 为 `per-session`。
-   - 真实 provider id：`deepseek/<model>`、`ollama_embedding/<embedding-model>`、`<provider>/<model>`、`<provider>/<model-2>`、`<provider>/<model-3>`（全部含 `/`，正好覆盖本次修复）。
+   - 真实 provider id：`deepseek/model-a`、`ollama_embedding/embedding-model-a`、`example-provider/model-a`、`example-provider/model-b`、`example-provider/model-c`（全部含 `/`，正好覆盖本次修复）。
 2. **旧 `state/backups` 只读**：`{"count":15,"bytes":33866881,"newest":"bc1257f4-…","oldest":"a4ebf5e3-…","allSqliteOk":true}`；逐项 UUID/createdAt/bytes/files 校验通过；读取 profile default（`cmd_config.json`）、plugin livingmemory（`config/…_config.json`）、真实 provider（含 `/`）均成功；`backups` 目录 mtime 读取前后一致。
 3. **审计中发现并已修复的问题**：修复前 `src/backup.mjs` 的 `SAFE_RESOURCE_ID` 与 `src/server.mjs` 的 `parseResource` 拒绝 `/`，真实 provider 的恢复/diff 在 engine 与 HTTP 两层都不可用（`RESTORE_BACKUP_INVALID` / 400 INVALID_RESOURCE）。定稿版 `validProviderId`（`src/backup.mjs:142-147`）与 `PROVIDER_RESOURCE_ID`（`src/server.mjs:86-106`）已放行，并保留路径穿越/反斜杠/盘符/空段/>200 的拒绝；本次重跑按“放行 + 非法仍拒绝”断言并全绿。
 
