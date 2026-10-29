@@ -3,9 +3,8 @@ import http from 'node:http';
 import {randomBytes,timingSafeEqual} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {resolve,join} from 'node:path';
-import {appendFile,readFile,stat,unlink,writeFile} from 'node:fs/promises';
+import {appendFile,readFile,stat} from 'node:fs/promises';
 import {readFileSync} from 'node:fs';
-import {tmpdir} from 'node:os';
 import {spawn} from 'node:child_process';
 import {Gateway} from './gateway.mjs';
 import {Engine,knownError} from './engine.mjs';
@@ -605,17 +604,14 @@ function bindServer(server,port){
  * The URL goes into a user-private temp file; PowerShell receives only the path. Best-effort: a failed
  * launch only prints a hint, and the temp file is removed after 15s.
  */
+/** Launch the default browser. Never touches %TEMP%: security software can block executables on other
+ *  drives from writing AppData, and a failed browser handoff otherwise looks like "startup failed". */
 function openInBrowser(url){
-  const target=join(tmpdir(),`model-console-open-${process.pid}-${randomBytes(6).toString('hex')}.txt`);
-  const cleanup=setTimeout(()=>unlink(target).catch(()=>{}),15000);
-  cleanup.unref();
-  writeFile(target,url,'utf8').then(()=>{
-    const quoted=target.replace(/'/g,"''");
-    const command=`Start-Process -FilePath ((Get-Content -LiteralPath '${quoted}' -Raw).Trim())`;
-    const browser=spawn('powershell.exe',['-NoProfile','-NonInteractive','-WindowStyle','Hidden','-Command',command],{stdio:'ignore',windowsHide:true});
-    browser.on('error',()=>console.error('Browser launch failed; open the displayed local URL manually.'));
-    browser.unref();
-  }).catch(()=>console.error('Browser launch failed; open the displayed local URL manually.'));
+  const escaped=String(url).replaceAll("'","''");
+  const command=`Start-Process -FilePath '${escaped}'`;
+  const browser=spawn('powershell.exe',['-NoProfile','-NonInteractive','-WindowStyle','Hidden','-Command',command],{stdio:'ignore',windowsHide:true});
+  browser.on('error',()=>console.error('Browser launch failed; open the displayed local URL manually.'));
+  browser.unref();
 }
 
 /**

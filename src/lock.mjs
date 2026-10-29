@@ -1,4 +1,4 @@
-﻿/** Single-instance lock. One state directory belongs to one live Model Console process. */
+/** Single-instance lock. One state directory belongs to one live Model Console process. */
 import {mkdir,readFile,rename,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
