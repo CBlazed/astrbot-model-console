@@ -24,6 +24,7 @@
 .restore-controls{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin:12px 0}
 .restore-diff{overflow-x:auto}
 .warning-text{color:#8a2f34;background:#fff2f2;border:1px solid #e6b6b8;border-radius:8px;padding:10px 12px;font-size:13px;margin:0 0 12px}
+.info-text{color:#24506b;background:#f2f7fb;border:1px solid #c9dcea;border-radius:8px;padding:10px 12px;font-size:13px;margin:0 0 12px}
 @media(max-width:920px){.wizard{padding:16px}.backup-actions,.restore-controls{align-items:stretch}.backup-actions .button,.restore-controls .button{width:100%}}
 .backup-table tr.selected td{background:var(--soft)}.conflict-table-wrap .binding-table th,.conflict-table-wrap .binding-table td{font-size:13px}.wizard .button{white-space:nowrap}
 .device-picker{display:inline-flex;align-items:center}

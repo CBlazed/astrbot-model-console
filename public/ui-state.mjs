@@ -136,6 +136,20 @@ export function backupWarnings(warnings,limit=5){
 /** Snapshot config version shown in the header (RISK-05). */
 export function configVersionText(snapshot){const value=snapshot?.configVersion;return `配置版本 ${value===undefined||value===null||value===''?'未知':String(value)}`;}
 
+/**
+ * Plan warning presentation for the confirm dialog.
+ * Engine plans always carry the same English caveat; showing it as a red error on every apply
+ * looked like a failure. Apply warnings become neutral, localized info; restore keeps the red
+ * destructive warning (whole-object overwrite).
+ */
+export function planWarning(warning,{restore=false}={}){
+ const raw=typeof warning==='string'?warning.trim():'';
+ if(restore)return {text:raw||'恢复会覆盖所选资源的完整对象（不只是下列差异字段）。请确认备份内容与差异后再应用。',kind:'danger'};
+ if(!raw)return null;
+ const boilerplate='No cross-resource atomicity; API readback is not a model generation test';
+ return {text:raw===boilerplate?'多资源按顺序保存，不是原子操作；保存并回读成功不代表模型已能生成。':raw,kind:'info'};
+}
+
 /** Binding status pills. field-missing means the path is absent from config, not an unverified empty value. */
 export const bindingStatuses={configured:{label:'已配置',kind:'good'},missing:{label:'引用缺失',kind:'bad'},disabled:{label:'模型禁用',kind:'bad'},'field-missing':{label:'字段不存在',kind:'bad'},'per-session':{label:'跟随会话',kind:'warn'},'empty-semantics-unverified':{label:'待核实',kind:'warn'}};
 export function bindingStatus(status){const known=bindingStatuses[status];return known?{...known}:{label:String(status??'未知'),kind:'warn'};}

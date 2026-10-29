@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {stage,groups,currentRevision,candidates,indexCapability,counts,parseTokenHash,loadToken,saveToken,clearToken,buildConflictRows,bindingStatus,routingNoticeText,isIssue,loadDevice,saveDevice,snapshotPath,isRemoteSnapshot,deviceOptions,healthBadge,deviceErrorText,deviceKind,deviceKindLabel,validateDeviceInput,backupWarnings,configVersionText,deviceApiPath,snapshotWritable,snapshotMode,hotLoadMessage} from '../public/ui-state.mjs';
+import {stage,groups,currentRevision,candidates,indexCapability,counts,parseTokenHash,loadToken,saveToken,clearToken,buildConflictRows,bindingStatus,routingNoticeText,isIssue,loadDevice,saveDevice,snapshotPath,isRemoteSnapshot,deviceOptions,healthBadge,deviceErrorText,deviceKind,deviceKindLabel,validateDeviceInput,backupWarnings,configVersionText,deviceApiPath,snapshotWritable,snapshotMode,hotLoadMessage,planWarning} from '../public/ui-state.mjs';
 test('UI drafts preserve original values and remove changes reverted to original',()=>{const resource={kind:'plugin',id:'one'};let drafts=stage(new Map(),resource,'model','luna','flash','r1');assert.equal([...drafts.values()][0].baseValue,'flash');drafts=stage(drafts,resource,'model','flash','flash','r1');assert.equal(drafts.size,0);});
 test('UI groups writes by resource while preserving unrelated resources',()=>{let drafts=new Map();drafts=stage(drafts,{kind:'plugin',id:'a'},'first','luna','','r');drafts=stage(drafts,{kind:'plugin',id:'a'},'second','luna','','r');drafts=stage(drafts,{kind:'profile',id:'b'},'main','flash','','s');assert.equal(groups(drafts).length,2);assert.equal(groups(drafts)[0].changes.length,2);});
 test('UI model candidates only include enabled models with declared capability',()=>{assert.deepEqual(candidates([{id:'a',enabled:true,capabilities:['llm']},{id:'b',enabled:false,capabilities:['vision']},{id:'c',enabled:true,capabilities:['vision']}],'vision').map(x=>x.id),['c']);assert.equal(indexCapability('embedding'),true);assert.equal(indexCapability('vision'),false);});
@@ -332,4 +332,17 @@ test('UI 页面覆盖 Epic-3 远程可写契约',()=>{
  assert.ok(!/\bconsole\.(log|info|debug|warn|error)\s*\(/.test(app));
  assert.ok(!/<script\b(?![^>]*\bsrc\s*=)/i.test(html));
  assert.ok(!/\bon[a-z]+\s*=\s*"/i.test(html));
+});
+
+test('UI plan warning: engine boilerplate becomes neutral Chinese info, restore stays a destructive warning',()=>{
+  const boilerplate=planWarning('No cross-resource atomicity; API readback is not a model generation test');
+  assert.deepEqual(boilerplate,{text:'多资源按顺序保存，不是原子操作；保存并回读成功不代表模型已能生成。',kind:'info'});
+  const restore=planWarning('恢复会覆盖该资源的完整对象',{restore:true});
+  assert.equal(restore.kind,'danger');
+  assert.match(restore.text,/恢复会覆盖/);
+  const restoreFallback=planWarning(undefined,{restore:true});
+  assert.equal(restoreFallback.kind,'danger');
+  assert.match(restoreFallback.text,/完整对象/);
+  assert.equal(planWarning(undefined),null);
+  assert.deepEqual(planWarning('自定义警告'),{text:'自定义警告',kind:'info'});
 });
