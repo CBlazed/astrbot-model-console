@@ -172,6 +172,14 @@ model-console/
 2. 改动后端后重启控制台，改动前端刷新即可；
 3. 不提交 `state/`、`dist/`、任何 token / API Key / 备份。
 
+## 配套项目
+
+- [**astrbot_plugin_model_websearch**](https://github.com/CBlazed/astrbot_plugin_model_websearch) —— AstrBot 插件：
+  把「AI 能力 → 网页搜索」的检索后端换成当前聊天模型自带的原生联网搜索（OpenAI Responses API `web_search`），
+  不另配第三方搜索 API。
+  本控制台的「跟随当前聊天模型（模型原生搜索）」选项、`provider_settings.websearch_native_provider_id`
+  （搜索使用模型）与「测试模型原生搜索」按钮都依赖它：插件未安装/未启用时该选项不会出现。
+
 ## 许可
 
 [MIT](LICENSE)。可自由使用、修改、分发，保留版权与许可声明即可。
