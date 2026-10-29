@@ -1,11 +1,15 @@
 /** Device registry for local/remote AstrBot consoles. Secrets (apiKey / agent token) live in a separate
- *  file, never in devices.json; pairing codes are consumed at pairing time and never persisted. */
+ *  file, never in devices.json; pairing codes are consumed at pairing time and never persisted.
+ *  Secrets are DPAPI-protected (`dpapi:<base64>`) with legacy plaintext migration; if DPAPI is unavailable
+ *  the console degrades to plaintext and reports it instead of blocking device features. */
 import {mkdir,readFile,rename,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {protect,unprotect,isProtected,SECURE_STORE_UNAVAILABLE} from './secure-store.mjs';
 
 export const DEVICE_KINDS=['http','ssh','agent'];
 export const DEVICE_AUTH_TYPES=['api-key','agent-token'];
+export const SECRETS_VERSION=2;
 const AUTH_FOR_KIND={http:'api-key',ssh:'api-key',agent:'agent-token'};
 
 const devicesPath=stateDir=>join(stateDir,'devices.json');
@@ -101,22 +105,27 @@ export async function saveRegistry(stateDir,registry){
   await atomicWrite(devicesPath(stateDir),{version:1,devices:registry.devices});
 }
 
-/** Public view: never returns the API key or pairing code, only whether a secret is stored. */
+/** Public view: never returns the API key or pairing code, only whether a secret is stored.
+ *  Stored ciphertext counts as present without decrypting, so listing stays cheap and robust. */
 export async function listDevices(stateDir){
   const registry=await loadRegistry(stateDir);
-  return Promise.all(registry.devices.map(async device=>({...device,hasSecret:Boolean(await getSecret(stateDir,device.id))})));
+  const secrets=await readSecrets(stateDir);
+  return registry.devices.map(device=>{
+    const stored=secrets.secrets?.[device.id];
+    return {...device,hasSecret:typeof stored==='string'&&stored.length>0};
+  });
 }
 
-export async function addDevice(stateDir,input,credential){
+export async function addDevice(stateDir,input,credential,options={}){
   const registry=await loadRegistry(stateDir);
   const device=validateDevice(input,{existingIds:registry.devices.map(x=>x.id),existingDevices:registry.devices});
   if(typeof credential!=='string'||!credential.trim())throw deviceError('DEVICE_SECRET_REQUIRED',secretMessage(device.kind));
   await saveRegistry(stateDir,{devices:[...registry.devices,device]});
-  await setSecret(stateDir,device.id,credential.trim());
+  await setSecret(stateDir,device.id,credential.trim(),options);
   return {...device,hasSecret:true};
 }
 
-export async function updateDevice(stateDir,id,patch){
+export async function updateDevice(stateDir,id,patch,options={}){
   const registry=await loadRegistry(stateDir);
   const index=registry.devices.findIndex(x=>x.id===id);
   if(index<0)throw deviceError('DEVICE_NOT_FOUND','设备不存在');
@@ -124,7 +133,7 @@ export async function updateDevice(stateDir,id,patch){
   const next=validateDevice({...current,...patch,id},{existingIds:registry.devices.filter(x=>x.id!==id).map(x=>x.id),existingDevices:registry.devices.filter(x=>x.id!==id)});
   const devices=[...registry.devices];devices[index]=next;
   await saveRegistry(stateDir,{devices});
-  if(typeof patch?.apiKey==='string'&&patch.apiKey.trim())await setSecret(stateDir,id,patch.apiKey.trim());
+  if(typeof patch?.apiKey==='string'&&patch.apiKey.trim())await setSecret(stateDir,id,patch.apiKey.trim(),options);
   return next;
 }
 
@@ -137,21 +146,53 @@ export async function removeDevice(stateDir,id){
 }
 
 async function readSecrets(stateDir){
-  return readJSON(secretsPath(stateDir),{version:1,secrets:{}});
+  const raw=await readJSON(secretsPath(stateDir),{version:SECRETS_VERSION,secrets:{}});
+  const secrets=raw&&typeof raw==='object'&&raw.secrets&&typeof raw.secrets==='object'&&!Array.isArray(raw.secrets)?raw.secrets:{};
+  return {version:SECRETS_VERSION,secrets};
 }
 
-export async function getSecret(stateDir,deviceId){
+/** Return the plaintext secret. Legacy plaintext values are accepted; DPAPI blobs are decrypted. */
+export async function getSecret(stateDir,deviceId,options={}){
   const secrets=await readSecrets(stateDir);
-  const value=secrets?.secrets?.[deviceId];
-  return typeof value==='string'?value:null;
+  const value=secrets.secrets[deviceId];
+  if(typeof value!=='string'||!value)return null;
+  return isProtected(value)?unprotect(value,options):value;
 }
 
-export async function setSecret(stateDir,deviceId,value){
+/**
+ * Store a secret as DPAPI ciphertext. If DPAPI is unavailable the secret is stored as plaintext and the
+ * returned report carries SECURE_STORE_UNAVAILABLE, so device features keep working.
+ * Returns {protected:boolean,code?}.
+ */
+export async function setSecret(stateDir,deviceId,value,options={}){
   await mkdir(stateDir,{recursive:true});
   const secrets=await readSecrets(stateDir);
-  if(!secrets.secrets||typeof secrets.secrets!=='object')secrets.secrets={};
-  secrets.secrets[deviceId]=value;
+  let stored=value,report={protected:true};
+  try{stored=await protect(value,options);}
+  catch(error){
+    if(error?.code!==SECURE_STORE_UNAVAILABLE)throw error;
+    report={protected:false,code:SECURE_STORE_UNAVAILABLE};
+  }
+  secrets.secrets[deviceId]=stored;
   await atomicWrite(secretsPath(stateDir),secrets);
+  return report;
+}
+
+/**
+ * Migrate legacy plaintext secrets to DPAPI. Failures keep the old plaintext (never delete) and are
+ * reported per device so startup can warn without blocking. Returns {migrated,failed,plaintextRemaining}.
+ */
+export async function migrateSecrets(stateDir,options={}){
+  const secrets=await readSecrets(stateDir);
+  const migrated=[],failed=[];
+  for(const [deviceId,value] of Object.entries(secrets.secrets)){
+    if(typeof value!=='string'||!value||isProtected(value))continue;
+    try{secrets.secrets[deviceId]=await protect(value,options);migrated.push(deviceId);}
+    catch(error){failed.push({id:deviceId,code:error?.code===SECURE_STORE_UNAVAILABLE?SECURE_STORE_UNAVAILABLE:'OPERATION_FAILED'});}
+  }
+  if(migrated.length)await atomicWrite(secretsPath(stateDir),secrets);
+  const plaintextRemaining=Object.values(secrets.secrets).filter(value=>typeof value==='string'&&value&&!isProtected(value)).length;
+  return {migrated,failed,plaintextRemaining};
 }
 
 export async function removeSecret(stateDir,deviceId){

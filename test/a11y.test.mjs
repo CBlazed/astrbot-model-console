@@ -154,3 +154,9 @@ test('SSH/Agent 表单扩展、诊断导出与 RISK 展示都可访问', () => {
   assert.match(html, /id="backup-warnings"[^>]*aria-label="备份警告"/, '备份警告列表缺少 aria-label');
   assert.match(html, /id="config-version"[^>]*>配置版本/, '缺少“配置版本”展示');
 });
+
+test('“允许远程写入”勾选有可访问名且属于 agent 表单', () => {
+  assert.match(html, /id="device-allow-write"[^>]*type="checkbox"[^>]*aria-label="允许远程写入"/, '允许远程写入必须是带 aria-label 的 checkbox');
+  assert.match(html, /id="device-allow-write-field"[^>]*hidden/, '允许远程写入默认隐藏（仅 agent 显示）');
+  assert.match(html, /id="backup-actions"[^>]*>/, '备份保留/清理操作容器缺少 id');
+});

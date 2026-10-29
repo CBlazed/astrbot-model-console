@@ -95,7 +95,8 @@
 | `src/http-adapter.mjs` | 远程 AstrBot OpenAPI v1 适配器（Bearer API Key） | 只走 `/api/v1/`；错误映射 DEVICE_*；远程只读 |
 | `src/ssh-tunnel.mjs` | SSH 设备隧道：`-N -L`、远端日志端口发现、就绪轮询、幂等 close | 只传参数数组不拼 shell；错误映射 DEVICE_SSH_*/DEVICE_PORT_UNKNOWN |
 | `src/agent.mjs` | Agent 进程：127.0.0.1、一次性配对码、token 哈希存储、`/agent/v1/health|pair|snapshot` | 不存明文 token；配对码一次性+限频；默认只读 |
-| `src/agent-adapter.mjs` | Hub 侧 Agent 配对与快照适配器 | 不记录/回传 token；错误映射 AGENT_* |
+| `src/agent-adapter.mjs` | Hub 侧 Agent 配对/快照/plan/apply/backups 适配器 | 不记录/回传 token；错误映射 AGENT_* |
+| `src/secure-store.mjs` | Windows DPAPI 加解密（值只走 stdin/stdout），失败 `SECURE_STORE_UNAVAILABLE` | 值/密文不得进命令行参数；非 Windows 明确降级 |
 | `src/inspect.mjs` | 只读实际实例快照 | 不引入隐藏写操作或生成调用 |
 | `scripts/build-package.mjs` | 便携包/zip 生成、SHA256SUMS（无安装器/自动更新） | 只按白名单复制，排除 state/.git/.tmp/日志/测试 |
 | `public/index.html` / `styles.css` | UI 结构与视觉样式 | 选中态、响应式、焦点和错误状态 |
@@ -276,6 +277,7 @@ node scripts/build-package.mjs [--zip]
 | MODEL_CONSOLE_BACKUP_KEEP | 备份保留份数，默认10；只清理含 manifest.json 的 UUID 目录，绝不动最新一份 |
 | MODEL_CONSOLE_BACKUP_MAX_MB | 备份总大小上限（MB），默认 2048；超限删最旧，告警写诊断 |
 | `--enable-writes` | 显式允许应用，不会自动保存 |
+| `node src/agent.mjs --enable-writes` | 远程 Agent 允许 Hub 计划/应用/备份；不加则只读 |
 | `--open` | Windows打开带本次工具令牌的浏览器地址 |
 
 单实例：启动时在状态目录写 `instance.lock`（pid/监听端口/启动时间）。已有存活实例时第二个进程打印 `ANOTHER_INSTANCE_RUNNING`、pid/端口并以退出码 1 结束；进程崩溃留下的锁会在下次启动时按“pid 不存活”自动清理。SIGINT/SIGTERM 会释放锁并关闭服务。
@@ -300,7 +302,7 @@ node scripts/build-package.mjs [--zip]
 
 ## 12. 测试与证据分级
 
-接手运行 `node --test --test-isolation=none`（受限沙箱里 `node --test` 会因 spawn EPERM 失败；正常环境可省略参数）。2026-10-29 Epic-2/3 审计后基线是 **253 项**（以当次结果为准）。
+接手运行 `node --test --test-isolation=none`（受限沙箱里 `node --test` 会因 spawn EPERM 失败；正常环境可省略参数）。2026-10-29 第二阶段审计后基线是 **290 项（288 pass / 2 skip，0 fail）**（以当次结果为准）。
 
 | 测试文件 | 重点 |
 |---|---|
@@ -356,7 +358,9 @@ node scripts/build-package.mjs [--zip]
 9. UI 端到端、键盘和响应式视觉验收仍未做；当前只有静态 a11y + DOM 契约测试。真实浏览器在本沙箱因 Chromium 命名管道 IPC 被拒，需在沙箱外补。
 10. 远程设备（HTTP/SSH/Agent）目前只读：`/plans`、`/apply` 未按 device 路由；Agent 本地备份索引、热加载日志验证未做。
 11. 便携包与 zip 已可构建并验证 SHA；无安装器/自动更新（Epic-3 只做便携 node）。未在无 Node 的干净 Windows 上独立启动验证。
-12. RISK-11：设备 API Key 明文存 `secrets.json`（仅用户目录权限）；未做 DPAPI 加密，分发时需提示。真实 SSH/远端 AstrBot 端到端、SIGINT 锁释放仍未验证。
+12. ~~RISK-11：设备 API Key 明文存 `secrets.json`~~ **已修**：Windows DPAPI 加密 `dpapi:`，启动时自动迁移旧明文；DPAPI 不可用时降级明文并在诊断留痕（Hub UI 暂不提示）。真实 SSH/第二台 Windows、干净 Windows 启动、真实 Ctrl+C、DPAPI 多用户/域环境仍未验证。
+13. 远程写仅限 Agent（目标机本地备份/审计 + hotLoad 证据）；HTTP/SSH 只读。`hotLoad.marker` 在 Agent 侧未先脱敏，由 Hub 脱敏；只读 Agent 的 `/agent/v1/backups` 可列备份。
+14. 真实浏览器已用 Chrome headless 验收（`docs/assets/e2e-home-2026-10-29.png`）；键盘/屏幕阅读器仍缺。
 
 ## 15. 修改后的交付要求
 
@@ -375,5 +379,6 @@ node scripts/build-package.mjs [--zip]
 - `2026-10-29-模型控制台P0修复.md`
 - `2026-10-29-模型控制台SprintABC.md`
 - `2026-10-29-模型控制台Epic2.md`
+- `2026-10-29-模型控制台Phase3.md`
 
 历史记录是证据线索，不是当前状态真源。遇到与本文或源码不一致的旧结论，以现场接口和源码核实后更新文档。

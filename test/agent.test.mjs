@@ -5,6 +5,7 @@ import {mkdtemp,mkdir,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {PAIRING_TTL_MS,main,startAgent} from '../src/agent.mjs';
+import {Engine} from '../src/engine.mjs';
 
 const sleep=ms=>new Promise(resolveSleep=>setTimeout(resolveSleep,ms));
 const sha256=value=>createHash('sha256').update(value,'utf8').digest('hex');
@@ -16,8 +17,9 @@ const pair=(base,code)=>fetch(`${base}/agent/v1/pair`,{method:'POST',headers:{'C
 async function withAgent(options,run){
   const root=await mkdtemp(join(tmpdir(),'model-console-agent-'));
   const stateDir=join(root,'state');
-  const agent=await startAgent({stateDir,engine:fakeEngine,...options});
-  try{return await run({agent,base:agent.url,stateDir,root});}
+  const engine=options.engine??fakeEngine;
+  const agent=await startAgent({stateDir,engine,...options});
+  try{return await run({agent,engine,base:agent.url,stateDir,root});}
   finally{await agent.close();await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});}
 }
 
@@ -194,6 +196,183 @@ test('CLI starts on 127.0.0.1 and prints url, pairingCode and expiresAt',async()
     console.log=originalLog;
     process.exitCode=savedExit;
     if(agent)await agent.close();
+    await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});
+  }
+});
+
+const planId='0f8fad5b-d9cb-469f-a165-70867728950e';
+const backupUuid='0f8fad5b-d9cb-469f-a165-70867728950e';
+
+async function pairedToken(base,agent){
+  const response=await pair(base,agent.pairingCode);
+  assert.equal(response.status,200);
+  return (await response.json()).token;
+}
+
+function jsonRequest(base,path,{method='GET',token,body}={}){
+  const headers={};
+  if(token)headers.Authorization=`Bearer ${token}`;
+  if(body!==undefined)headers['Content-Type']='application/json';
+  return fetch(base+path,{method,headers,body:body===undefined?undefined:JSON.stringify(body)});
+}
+
+/** Fake Engine for write-side tests: records calls, lets tests override failures. */
+function fakeWriteEngine(){
+  const calls=[];
+  const engine={
+    calls,
+    snapshot:async()=>({...snapshot,writeEnabled:true}),
+    plan:async(resource,changes,_internal,expectedRevision)=>{calls.push(['plan',resource,changes,expectedRevision]);return {id:planId,resource,revision:'rev-1',changes,warning:'warn',expiresAt:'2026-10-29T22:10:00.000Z',impact:'this profile'};},
+    apply:async id=>{calls.push(['apply',id]);return {status:'saved-and-readback-verified',id};},
+    listBackups:async()=>{calls.push(['listBackups']);return [{id:backupUuid,createdAt:'2026-10-29T10:00:00.000Z',bytes:10,files:2,sqlite:'ok'}];},
+    backupStats:async()=>{calls.push(['backupStats']);return {count:1,bytes:10,items:[{id:backupUuid}]};},
+  };
+  return engine;
+}
+
+test('write endpoints are 403 AGENT_READ_ONLY on a read-only agent and 401 without a token',()=>withAgent({},async({base,agent})=>{
+  const token=await pairedToken(base,agent);
+  const calls=[
+    ['POST','/agent/v1/plans',{resource:{kind:'profile',id:'default'},changes:[{path:'x',value:'y'}]}],
+    ['POST','/agent/v1/apply',{id:planId}],
+    ['GET','/agent/v1/backups',undefined],
+  ];
+  for(const [method,path,body] of calls){
+    const response=await jsonRequest(base,path,{method,token,body});
+    assert.equal(response.status,403,path);
+    assert.deepEqual(await response.json(),{error:'AGENT_READ_ONLY'},path);
+  }
+  for(const [method,path,body] of calls){
+    const response=await jsonRequest(base,path,{method,body});
+    assert.equal(response.status,401,path);
+    assert.deepEqual(await response.json(),{error:'AGENT_UNAUTHORIZED'},path);
+  }
+}));
+
+test('write mode plans, applies and verifies readback with a real Engine',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'model-console-agent-write-'));
+  const stateDir=join(root,'state');
+  const dataDir=join(root,'data');
+  await mkdir(join(dataDir,'config'),{recursive:true});
+  await writeFile(join(dataDir,'cmd_config.json'),'{}','utf8');
+  let current={agent_runner:{config:{model:{provider_id:'a'}}},provider:[{id:'a',type:'openai_chat_completion'},{id:'b',type:'openai_chat_completion'}]};
+  let writes=0;
+  const gateway={read:async()=>structuredClone(current),write:async(_resource,next)=>{writes++;current=structuredClone(next);},resources:async()=>[],efforts:async()=>['low']};
+  const engine=new Engine({gateway,writeEnabled:true,backup:async()=>`/tmp/backups/${backupUuid}`});
+  const agent=await startAgent({stateDir,dataDir,writeEnabled:true,engine});
+  try{
+    const token=await pairedToken(agent.url,agent);
+    const planResponse=await jsonRequest(agent.url,'/agent/v1/plans',{method:'POST',token,body:{resource:{kind:'profile',id:'default'},changes:[{path:'agent_runner.config.model.provider_id',value:'b'}]}});
+    assert.equal(planResponse.status,200);
+    const plan=await planResponse.json();
+    assert.match(plan.id,/^[0-9a-f-]{36}$/);
+    assert.deepEqual(plan.changes,[{path:'agent_runner.config.model.provider_id',value:'b'}]);
+    assert.ok(plan.warning);
+    const applyResponse=await jsonRequest(agent.url,'/agent/v1/apply',{method:'POST',token,body:{id:plan.id}});
+    assert.equal(applyResponse.status,200);
+    const applied=await applyResponse.json();
+    assert.equal(applied.result.status,'saved-and-readback-verified');
+    assert.equal(applied.result.id,plan.id);
+    assert.equal(writes,1);
+    assert.equal(current.agent_runner.config.model.provider_id,'b');
+    const snapshotResponse=await jsonRequest(agent.url,'/agent/v1/snapshot',{token});
+    assert.equal(snapshotResponse.status,200);
+    assert.equal((await snapshotResponse.json()).writeEnabled,true);
+    assert.equal(typeof applied.hotLoad,'object');
+    assert.equal(applied.hotLoad.checked,true);
+    assert.equal(applied.hotLoad.verified,false);
+    const replay=await jsonRequest(agent.url,'/agent/v1/apply',{method:'POST',token,body:{id:plan.id}});
+    assert.equal(replay.status,409);
+    assert.equal((await replay.json()).error,'PLAN_EXPIRED');
+  }finally{
+    await agent.close();
+    await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});
+  }
+});
+
+test('hotLoad evidence reports missing-log, miss and hit from the AstrBot log tail',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'model-console-agent-hotload-'));
+  const stateDir=join(root,'state');
+  const dataDir=join(root,'data');
+  await mkdir(dataDir,{recursive:true});
+  const engine=fakeWriteEngine();
+  const agent=await startAgent({stateDir,dataDir,writeEnabled:true,engine});
+  const logPath=join(dataDir,'logs','astrbot.log');
+  const applyOnce=async token=>{
+    const response=await jsonRequest(agent.url,'/agent/v1/apply',{method:'POST',token,body:{id:planId}});
+    assert.equal(response.status,200);
+    return (await response.json()).hotLoad;
+  };
+  try{
+    const token=await pairedToken(agent.url,agent);
+    const missing=await applyOnce(token);
+    assert.equal(missing.checked,true);
+    assert.equal(missing.verified,false);
+    assert.match(missing.note,/无法读取/);
+
+    await mkdir(join(dataDir,'logs'),{recursive:true});
+    await writeFile(logPath,'[INFO] started\n[INFO] http server ready\n','utf8');
+    const miss=await applyOnce(token);
+    assert.equal(miss.checked,true);
+    assert.equal(miss.verified,false);
+    assert.match(miss.note,/未发现/);
+    assert.equal('marker' in miss,false);
+
+    await writeFile(logPath,'[INFO] started\n[INFO] 配置已更新，热重载完成\n','utf8');
+    const hit=await applyOnce(token);
+    assert.equal(hit.verified,true);
+    assert.equal(hit.checked,true);
+    assert.match(hit.marker,/热重载/);
+  }finally{
+    await agent.close();
+    await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});
+  }
+});
+
+test('GET /agent/v1/backups returns contract fields and environment limits',()=>withAgent({writeEnabled:true,engine:fakeWriteEngine(),env:{...process.env,MODEL_CONSOLE_BACKUP_KEEP:'4',MODEL_CONSOLE_BACKUP_MAX_MB:'16'}},async({base,agent})=>{
+  const token=await pairedToken(base,agent);
+  const response=await jsonRequest(base,'/agent/v1/backups',{token});
+  assert.equal(response.status,200);
+  const body=await response.json();
+  assert.deepEqual(body.backups,[{id:backupUuid,createdAt:'2026-10-29T10:00:00.000Z',bytes:10,files:2,sqlite:'ok'}]);
+  assert.deepEqual(body.stats,{count:1,bytes:10});
+  assert.deepEqual(body.limits,{keep:4,maxBytes:16*1024*1024});
+  assert.doesNotMatch(JSON.stringify(body),/items|AstrBotModelConsole/);
+}));
+
+test('plan/apply engine errors are 409 with whitelisted details only',()=>withAgent({writeEnabled:true,engine:fakeWriteEngine()},async({base,agent,engine})=>{
+  const token=await pairedToken(base,agent);
+  const failure=Error('CONCURRENT_CHANGE');
+  failure.details={id:planId,backupId:'/abs/backups/0f8fad5b',token:'abc',path:'C:\\Users\\someone\\state',code:'CONCURRENT_CHANGE'};
+  engine.apply=async()=>{throw failure;};
+  const response=await jsonRequest(base,'/agent/v1/apply',{method:'POST',token,body:{id:planId}});
+  assert.equal(response.status,409);
+  const body=await response.json();
+  assert.deepEqual(body,{error:'CONCURRENT_CHANGE',id:planId,code:'CONCURRENT_CHANGE'});
+  assert.doesNotMatch(JSON.stringify(body),/[A-Za-z]:\\\\|abs\/backups|someone|abc/);
+  engine.plan=async()=>{throw Error('INVALID_PLAN');};
+  const planResponse=await jsonRequest(base,'/agent/v1/plans',{method:'POST',token,body:{resource:{kind:'profile',id:'default'},changes:[]}});
+  assert.equal(planResponse.status,409);
+  assert.deepEqual(await planResponse.json(),{error:'INVALID_PLAN'});
+}));
+
+test('a write-enabled agent without an injected engine wires the real backup listing',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'model-console-agent-backups-'));
+  const stateDir=join(root,'state');
+  const dataDir=join(root,'data');
+  await mkdir(join(dataDir,'config'),{recursive:true});
+  await writeFile(join(dataDir,'cmd_config.json'),'{}','utf8');
+  const agent=await startAgent({stateDir,dataDir,writeEnabled:true});
+  try{
+    const token=await pairedToken(agent.url,agent);
+    const response=await jsonRequest(agent.url,'/agent/v1/backups',{token});
+    assert.equal(response.status,200);
+    const body=await response.json();
+    assert.deepEqual(body.backups,[]);
+    assert.deepEqual(body.stats,{count:0,bytes:0});
+    assert.deepEqual(body.limits,{keep:10,maxBytes:2048*1024*1024});
+  }finally{
+    await agent.close();
     await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:50});
   }
 });

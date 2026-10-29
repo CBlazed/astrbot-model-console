@@ -94,7 +94,14 @@ test('POST /devices stores the apiKey outside responses/devices.json; GET /devic
   assert.equal(list.devices[0].id,'local');
   assert.doesNotMatch(JSON.stringify(list),/abk_SECRET|apiKey/);
   assert.doesNotMatch(await readFile(join(stateDir,'devices.json'),'utf8'),/abk_SECRET/);
-  assert.match(await readFile(join(stateDir,'secrets.json'),'utf8'),/abk_SECRET_do_not_leak/);
+  const storedSecrets=JSON.parse(await readFile(join(stateDir,'secrets.json'),'utf8'));
+  const storedKey=storedSecrets.secrets?.[created.id];
+  assert.ok(typeof storedKey==='string'&&storedKey.length>0,'secrets.json 必须保存设备凭据');
+  if(storedKey.startsWith('dpapi:'))assert.match(storedKey,/^dpapi:[A-Za-z0-9+/=]+$/,'DPAPI 密文格式');
+  else assert.equal(storedKey,'abk_SECRET_do_not_leak','仅 DPAPI 不可用时允许降级明文');
+  assert.doesNotMatch(JSON.stringify(await (await fetch(base+'/devices',{headers:auth})).json()),/abk_SECRET_do_not_leak/);
+  const journal=await readFile(join(stateDir,'diagnostics.jsonl'),'utf8').catch(()=>'');
+  assert.doesNotMatch(journal,/abk_SECRET_do_not_leak/,'诊断不得包含密钥');
 }));
 
 test('POST /devices maps validation errors and duplicates: 400 invalid/secret, 409 same kind+baseUrl',()=>fixture(async({base})=>{
@@ -199,7 +206,13 @@ test('agent devices pair on POST, reuse a cached adapter snapshot read-only, and
     assert.equal(paired.length,1);
     assert.equal(paired[0].pairingCode,'12345678');
     assert.equal(paired[0].device.baseUrl,'http://127.0.0.1:9100');
-    assert.equal((await readFile(join(stateDir,'secrets.json'),'utf8')).includes('a'.repeat(64)),true);
+    const agentSecrets=JSON.parse(await readFile(join(stateDir,'secrets.json'),'utf8'));
+    const storedToken=agentSecrets.secrets?.[device.id];
+    assert.ok(typeof storedToken==='string'&&storedToken.length>0,'secrets.json 必须保存 agent token');
+    if(storedToken.startsWith('dpapi:'))assert.match(storedToken,/^dpapi:[A-Za-z0-9+/=]+$/,'DPAPI 密文格式');
+    else assert.equal(storedToken,'a'.repeat(64),'仅 DPAPI 不可用时允许降级明文');
+    const journal=await readFile(join(stateDir,'diagnostics.jsonl'),'utf8').catch(()=>'');
+    assert.doesNotMatch(journal,/a{64}/,'诊断不得包含 token');
     const registry=await readFile(join(stateDir,'devices.json'),'utf8');
     assert.equal(registry.includes('12345678')||registry.includes('a'.repeat(64)),false);
     const snapshot=await (await fetch(`${base}/snapshot?device=${encodeURIComponent(device.id)}`,{headers:auth})).json();
@@ -312,3 +325,124 @@ test('device routes never write the apiKey/pairing code into the diagnostics jou
   assert.match(journal,/DEVICE_NOT_FOUND/);
   assert.doesNotMatch(journal,/abk_DIAG|apiKey|pairingCode/i);
 }));
+
+const WRITE_PLAN_ID='0f8fad5b-d9cb-469f-a165-70867728950e';
+const WRITE_BACKUP_ID='0243f684-e8ed-44ac-8c95-657df32890aa';
+const BACKSLASH=String.fromCharCode(92);
+/** Fake AgentAdapter used for Hub remote-write routes (plan/apply/backups). */
+function writableAgentAdapter(options={}){
+  const adapter={
+    calls:[],
+    closed:false,
+    snapshots:0,
+    async snapshot(){adapter.snapshots++;return {writeEnabled:options.snapshotWriteEnabled!==false,models:[],resources:[],configVersion:null};},
+    async health(){return {reachable:true,latencyMs:2};},
+    async plan(payload){adapter.calls.push(['plan',payload]);if(payload?.resource?.id==='readonly')throw codeError('AGENT_READ_ONLY');return {id:WRITE_PLAN_ID,resource:payload.resource,changes:payload.changes,expiresAt:'2026-10-29T12:00:00.000Z',impact:'this profile',warning:'no cross-resource atomicity'};},
+    async apply(id){adapter.calls.push(['apply',id]);return {result:{status:'saved-and-readback-verified',id,backupId:['C:','Users','alice','backups',WRITE_BACKUP_ID].join(BACKSLASH),generationVerified:false},hotLoad:{verified:true,checked:true,marker:'reload at '+['C:','secret','path'].join(BACKSLASH),note:'hot reload detected'}};},
+    async backups(){adapter.calls.push(['backups']);return {backups:[{id:WRITE_BACKUP_ID,createdAt:'2026-10-29T10:00:00.000Z',bytes:100,files:8,sqlite:'ok',internal:'drop-me'}],stats:{count:1,bytes:100,items:[{internal:true}]},limits:{keep:5,maxBytes:1024}};},
+    async close(){adapter.closed=true;},
+  };
+  return adapter;
+}
+
+test('POST /devices keeps remote writes only for agent devices; http/ssh readOnly is forced true',()=>{
+  const adapters=[];
+  const options={
+    pairAgentDevice:async()=>({token:'a'.repeat(64)}),
+    createAgentAdapter:(device,token)=>{const adapter=writableAgentAdapter();adapters.push({device,token,adapter});return adapter;},
+  };
+  return fixture(async({base})=>{
+    const create=async body=>{const response=await fetch(base+'/devices',{method:'POST',headers:jsonHeaders,body:JSON.stringify(body)});assert.equal(response.status,200,JSON.stringify(body));return (await response.json()).device;};
+    const http=await create({name:'http',baseUrl:'http://127.0.0.1:6200',apiKey:'abk_http',readOnly:false});
+    assert.equal(http.readOnly,true,'http 设备必须强制只读');
+    const ssh=await create({name:'ssh',kind:'ssh',baseUrl:'http://127.0.0.1:6201',ssh:{host:'10.0.0.2',user:'root'},apiKey:'abk_ssh',readOnly:false});
+    assert.equal(ssh.readOnly,true,'ssh 设备必须强制只读');
+    const agent=await create({name:'agent',kind:'agent',baseUrl:'http://127.0.0.1:6202',pairingCode:'12345678',readOnly:false});
+    assert.equal(agent.readOnly,false,'agent 设备允许 readOnly:false');
+    const agentDefault=await create({name:'agent-default',kind:'agent',baseUrl:'http://127.0.0.1:6203',pairingCode:'12345678'});
+    assert.equal(agentDefault.readOnly,true,'agent 默认仍只读');
+  },options);
+});
+
+test('writable agent routes: snapshot flag, plan/apply/backups proxies, permissions and error mapping',()=>{
+  const adapters=[];
+  const options={
+    pairAgentDevice:async()=>({token:'a'.repeat(64)}),
+    createAgentAdapter:device=>{const adapter=writableAgentAdapter({snapshotWriteEnabled:device.baseUrl.endsWith('6202')});adapters.push({device,adapter});return adapter;},
+  };
+  return fixture(async({base,stateDir})=>{
+    const create=async body=>{const response=await fetch(base+'/devices',{method:'POST',headers:jsonHeaders,body:JSON.stringify(body)});assert.equal(response.status,200,JSON.stringify(body));return (await response.json()).device;};
+    const writable=await create({name:'可写 agent',kind:'agent',baseUrl:'http://127.0.0.1:6202',pairingCode:'12345678',readOnly:false});
+    const readOnly=await create({name:'只读 agent',kind:'agent',baseUrl:'http://127.0.0.1:6204',pairingCode:'12345678',readOnly:true});
+    const agentButReadOnlyServer=await create({name:'agent 端只读',kind:'agent',baseUrl:'http://127.0.0.1:6205',pairingCode:'12345678',readOnly:false});
+    const http=await create({name:'http',baseUrl:'http://127.0.0.1:6200',apiKey:'abk_http'});
+    const ssh=await create({name:'ssh',kind:'ssh',baseUrl:'http://127.0.0.1:6201',ssh:{host:'10.0.0.2',user:'root'},apiKey:'abk_ssh'});
+
+    // 快照写标志：设备可写 + Agent 可写 → true；设备只读或 Agent 只读 → false；http 恒 false。
+    const writableSnapshot=await (await fetch(`${base}/snapshot?device=${writable.id}`,{headers:auth})).json();
+    assert.equal(writableSnapshot.writeEnabled,true);
+    assert.equal(writableSnapshot.device.kind,'agent');
+    assert.equal((await (await fetch(`${base}/snapshot?device=${readOnly.id}`,{headers:auth})).json()).writeEnabled,false);
+    assert.equal((await (await fetch(`${base}/snapshot?device=${agentButReadOnlyServer.id}`,{headers:auth})).json()).writeEnabled,false,'Agent 自身只读时 Hub 不得放开写');
+
+    const headers={...auth,'Content-Type':'application/json'};
+    const planPayload={resource:{kind:'profile',id:'default'},changes:[{path:'agent_runner.config.model.provider_id',value:'a'}],expectedRevision:'rev-1'};
+    let response=await fetch(`${base}/plans?device=${writable.id}`,{method:'POST',headers,body:JSON.stringify(planPayload)});
+    assert.equal(response.status,200);
+    let body=await response.json();
+    assert.equal(body.id,WRITE_PLAN_ID);
+    assert.deepEqual(body.changes,[{path:'agent_runner.config.model.provider_id',before:null,value:'a',capability:null}]);
+    assert.equal(body.warning,'no cross-resource atomicity');
+    const adapter=adapters.find(entry=>entry.device.id===writable.id).adapter;
+    assert.deepEqual(adapter.calls.find(call=>call[0]==='plan'),['plan',{resource:planPayload.resource,changes:planPayload.changes,expectedRevision:'rev-1'}]);
+
+    response=await fetch(`${base}/apply?device=${writable.id}`,{method:'POST',headers,body:JSON.stringify({id:WRITE_PLAN_ID})});
+    assert.equal(response.status,200);
+    body=await response.json();
+    assert.equal(body.status,'saved-and-readback-verified');
+    assert.equal(body.id,WRITE_PLAN_ID);
+    assert.equal(body.backupId,WRITE_BACKUP_ID,'远程 apply 的 backupId 只能是 UUID basename');
+    assert.deepEqual(body.hotLoad,{verified:true,checked:true,marker:'reload at [path]',note:'hot reload detected'});
+    assert.doesNotMatch(JSON.stringify(body),/C:\\|alice|secret/);
+    assert.deepEqual(adapter.calls.find(call=>call[0]==='apply'),['apply',WRITE_PLAN_ID]);
+
+    response=await fetch(`${base}/backups?device=${writable.id}`,{headers:auth});
+    assert.equal(response.status,200);
+    body=await response.json();
+    assert.deepEqual(body,{backups:[{id:WRITE_BACKUP_ID,createdAt:'2026-10-29T10:00:00.000Z',bytes:100,files:8,sqlite:'ok'}],stats:{count:1,bytes:100},limits:{keep:5,maxBytes:1024}});
+    assert.doesNotMatch(JSON.stringify(body),/internal|drop-me/);
+    // 只读 agent 也可查看远程备份（是否开放由 Agent 决定）。
+    assert.equal((await fetch(`${base}/backups?device=${readOnly.id}`,{headers:auth})).status,200);
+
+    // 权限：http/ssh 与只读 agent 一律 403 DEVICE_READ_ONLY。
+    for(const device of [http,ssh,readOnly]){
+      for(const [path,payload] of [['/plans',planPayload],['/apply',{id:WRITE_PLAN_ID}]]){
+        response=await fetch(`${base}${path}?device=${device.id}`,{method:'POST',headers,body:JSON.stringify(payload)});
+        assert.equal(response.status,403,`${path} ${device.kind}`);
+        assert.deepEqual(await response.json(),{error:'DEVICE_READ_ONLY'});
+      }
+    }
+    for(const device of [http,ssh]){
+      response=await fetch(`${base}/backups?device=${device.id}`,{headers:auth});
+      assert.equal(response.status,403,device.kind);
+      assert.deepEqual(await response.json(),{error:'DEVICE_READ_ONLY'});
+    }
+    // 未知设备：写路由与远程备份都 404。
+    for(const path of [`/plans?device=${'missing'}`,`/apply?device=${'missing'}`,`/backups?device=${'missing'}`]){
+      response=path.includes('/backups')?await fetch(base+path,{headers:auth}):await fetch(base+path,{method:'POST',headers,body:JSON.stringify(planPayload)});
+      assert.equal(response.status,404,path);
+      assert.deepEqual(await response.json(),{error:'DEVICE_NOT_FOUND'});
+    }
+    // 错误映射：Agent 403 → Hub 403 AGENT_READ_ONLY；Agent 不可达 → 409 AGENT_UNREACHABLE。
+    response=await fetch(
+`${base}/plans?device=${writable.id}`,{method:'POST',headers,body:JSON.stringify({...planPayload,resource:{kind:'profile',id:'readonly'}})});
+    assert.equal(response.status,403);
+    assert.deepEqual(await response.json(),{error:'AGENT_READ_ONLY'});
+    adapter.apply=async()=>{throw codeError('AGENT_UNREACHABLE');};
+    response=await fetch(`${base}/apply?device=${writable.id}`,{method:'POST',headers,body:JSON.stringify({id:WRITE_PLAN_ID})});
+    assert.equal(response.status,409);
+    assert.deepEqual(await response.json(),{error:'AGENT_UNREACHABLE'});
+    // 密钥不泄露：响应里没有设备 token/apiKey。
+    assert.doesNotMatch(JSON.stringify(body),/a{64}|abk_/);
+  },options);
+});

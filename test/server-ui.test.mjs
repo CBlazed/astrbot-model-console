@@ -366,3 +366,24 @@ test('POST /restore-plans returns only whitelisted top-level fields (RISK-08)',(
   const serialized=JSON.stringify(body);
   assert.doesNotMatch(serialized,/KEEP-BEFORE|KEEP-AFTER|drop-me|C:\\|abk_do_not_leak|secret/i);
 }));
+
+test('device=local keeps local plans/apply/backups behavior (Hub write routing only for agent ids)',()=>apiFixture(async({base,engine})=>{
+  const planId='0f8fad5b-d9cb-469f-a165-70867728950e';
+  let plans=0,applies=0;
+  engine.plan=async(resource,changes,_internal,expectedRevision)=>{plans++;return {id:planId,resource,changes,expectedRevision};};
+  engine.apply=async()=>{applies++;return {status:'saved-and-readback-verified',id:planId};};
+  const headers={...auth,'Content-Type':'application/json'};
+  let response=await fetch(base+'/plans?device=local',{method:'POST',headers,body:JSON.stringify({resource:{kind:'profile',id:'default'},changes:[{path:'x',value:'y'}]})});
+  assert.equal(response.status,200);
+  assert.equal((await response.json()).id,planId);
+  assert.equal(plans,1,'device=local 必须走本机 engine，而不是远程代理');
+  response=await fetch(base+'/apply?device=local',{method:'POST',headers,body:JSON.stringify({id:planId})});
+  assert.equal(response.status,200);
+  assert.equal((await response.json()).status,'saved-and-readback-verified');
+  assert.equal(applies,1,'device=local 必须走本机 engine.apply');
+  response=await fetch(base+'/backups?device=local',{headers:auth});
+  assert.equal(response.status,200);
+  const backups=await response.json();
+  assert.ok(Array.isArray(backups.backups));
+  assert.ok(Array.isArray(backups.warnings));
+}));

@@ -679,11 +679,19 @@ test('Epic-1 /devices：CRUD、secret 分离、重复 409、DELETE true、health
     const devicesFile=await readFile(join(stateDir,'devices.json'),'utf8');
     const secretsFile=await readFile(join(stateDir,'secrets.json'),'utf8');
     assert.doesNotMatch(devicesFile,/abk_SECRET/);
-    assert.match(secretsFile,/abk_SECRET_A/);
-    assert.match(secretsFile,/abk_SECRET_B/);
-    // readOnly:false 透传；同 kind + 规范化 baseUrl 重复 → 409 DEVICE_EXISTS（RISK-03）。
+    // §9.3：DPAPI 可用时 secrets.json 是 dpapi:<base64>，不可用时降级明文；两种都不能出现在响应/日志。
+    const storedSecrets=Object.values(JSON.parse(secretsFile).secrets??{});
+    assert.ok(storedSecrets.length>=2);
+    if(storedSecrets.some(value=>typeof value==='string'&&value.startsWith('dpapi:'))){
+      assert.ok(storedSecrets.every(value=>typeof value==='string'&&value.startsWith('dpapi:')),'DPAPI 可用时必须全部加密');
+      assert.doesNotMatch(secretsFile,/abk_SECRET_A|abk_SECRET_B/);
+    }else{
+      assert.match(secretsFile,/abk_SECRET_A/);
+      assert.match(secretsFile,/abk_SECRET_B/);
+    }
+    // §9.2：http/ssh 设备 readOnly 强制 true，只有 agent 允许 readOnly:false。
     const writable=await (await fetch(base+'/devices',{method:'POST',headers:JSON_HEADERS,body:JSON.stringify({name:'可写设备',baseUrl:'http://192.168.1.22:6185',apiKey:'abk_SECRET_C',readOnly:false})})).json();
-    assert.equal(writable.device.readOnly,false);
+    assert.equal(writable.device.readOnly,true,'http 设备 readOnly:false 必须被强制为 true');
     const duplicate=await fetch(base+'/devices',{method:'POST',headers:JSON_HEADERS,body:JSON.stringify({name:'书房主机',baseUrl:'http://192.168.1.20:6185/',apiKey:'abk_SECRET_D'})});
     assert.equal(duplicate.status,409);
     assert.deepEqual(await duplicate.json(),{error:'DEVICE_EXISTS'});

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {stage,groups,currentRevision,candidates,indexCapability,counts,parseTokenHash,loadToken,saveToken,clearToken,buildConflictRows,bindingStatus,routingNoticeText,isIssue,loadDevice,saveDevice,snapshotPath,isRemoteSnapshot,deviceOptions,healthBadge,deviceErrorText,deviceKind,deviceKindLabel,validateDeviceInput,backupWarnings,configVersionText} from '../public/ui-state.mjs';
+import {stage,groups,currentRevision,candidates,indexCapability,counts,parseTokenHash,loadToken,saveToken,clearToken,buildConflictRows,bindingStatus,routingNoticeText,isIssue,loadDevice,saveDevice,snapshotPath,isRemoteSnapshot,deviceOptions,healthBadge,deviceErrorText,deviceKind,deviceKindLabel,validateDeviceInput,backupWarnings,configVersionText,deviceApiPath,snapshotWritable,snapshotMode,hotLoadMessage} from '../public/ui-state.mjs';
 test('UI drafts preserve original values and remove changes reverted to original',()=>{const resource={kind:'plugin',id:'one'};let drafts=stage(new Map(),resource,'model','luna','flash','r1');assert.equal([...drafts.values()][0].baseValue,'flash');drafts=stage(drafts,resource,'model','flash','flash','r1');assert.equal(drafts.size,0);});
 test('UI groups writes by resource while preserving unrelated resources',()=>{let drafts=new Map();drafts=stage(drafts,{kind:'plugin',id:'a'},'first','luna','','r');drafts=stage(drafts,{kind:'plugin',id:'a'},'second','luna','','r');drafts=stage(drafts,{kind:'profile',id:'b'},'main','flash','','s');assert.equal(groups(drafts).length,2);assert.equal(groups(drafts)[0].changes.length,2);});
 test('UI model candidates only include enabled models with declared capability',()=>{assert.deepEqual(candidates([{id:'a',enabled:true,capabilities:['llm']},{id:'b',enabled:false,capabilities:['vision']},{id:'c',enabled:true,capabilities:['vision']}],'vision').map(x=>x.id),['c']);assert.equal(indexCapability('embedding'),true);assert.equal(indexCapability('vision'),false);});
@@ -214,7 +214,7 @@ test('UI device kind normalizes legacy records and labels every kind',()=>{
 test('UI device form validates http/ssh/agent payloads and never echoes secrets',()=>{
  const http=validateDeviceInput({kind:'http',name:' 书房主机 ',baseUrl:'http://192.168.1.20:6185',apiKey:' abk_key '});
  assert.equal(http.ok,true);
- assert.deepEqual(http.payload,{name:'书房主机',kind:'http',baseUrl:'http://192.168.1.20:6185',apiKey:'abk_key'});
+ assert.deepEqual(http.payload,{name:'书房主机',kind:'http',baseUrl:'http://192.168.1.20:6185',apiKey:'abk_key',readOnly:true});
  assert.deepEqual(validateDeviceInput({kind:'http',name:'',baseUrl:''}).errors,['DEVICE_NAME_REQUIRED','DEVICE_BASEURL_REQUIRED','DEVICE_SECRET_REQUIRED']);
  assert.deepEqual(validateDeviceInput({name:'旧表单',baseUrl:'http://a',apiKey:'abk'}).payload.kind,'http');
  const ssh=validateDeviceInput({kind:'ssh',name:'云主机',baseUrl:'http://127.0.0.1:6185',apiKey:'abk_1',host:'1.2.3.4',port:'2222',user:'Administrator',keyPath:' C:\\keys\\id ',dataPath:'C:\\AstrBot\\data'});
@@ -226,9 +226,14 @@ test('UI device form validates http/ssh/agent payloads and never echoes secrets'
  assert.deepEqual(validateDeviceInput({kind:'ssh',name:'x',baseUrl:'http://a',apiKey:''}).errors,['DEVICE_SECRET_REQUIRED','DEVICE_SSH_HOST_REQUIRED','DEVICE_SSH_USER_REQUIRED']);
  const agent=validateDeviceInput({kind:'agent',name:'Agent 主机',baseUrl:'http://127.0.0.1:7100',pairingCode:' 12345678 '});
  assert.equal(agent.ok,true);
- assert.deepEqual(agent.payload,{name:'Agent 主机',kind:'agent',baseUrl:'http://127.0.0.1:7100',pairingCode:'12345678'});
+ assert.deepEqual(agent.payload,{name:'Agent 主机',kind:'agent',baseUrl:'http://127.0.0.1:7100',pairingCode:'12345678',readOnly:true});
  assert.equal(agent.payload.apiKey,undefined);
  assert.deepEqual(validateDeviceInput({kind:'agent',name:'x',baseUrl:'http://a'}).errors,['DEVICE_PAIRING_REQUIRED']);
+ // 允许远程写入：仅 agent 生效，http/ssh 恒只读。
+ assert.equal(validateDeviceInput({kind:'agent',name:'x',baseUrl:'http://a',pairingCode:'1',allowWrite:true}).payload.readOnly,false);
+ assert.equal(validateDeviceInput({kind:'agent',name:'x',baseUrl:'http://a',pairingCode:'1',allowWrite:false}).payload.readOnly,true);
+ assert.equal(validateDeviceInput({kind:'http',name:'x',baseUrl:'http://a',apiKey:'k',allowWrite:true}).payload.readOnly,true);
+ assert.equal(validateDeviceInput({kind:'ssh',name:'x',baseUrl:'http://a',apiKey:'k',host:'h',user:'u',allowWrite:true}).payload.readOnly,true);
 });
 test('UI SSH/Agent/backup and version RISK texts are readable and bounded',()=>{
  assert.match(deviceErrorText('DEVICE_SSH_UNAVAILABLE'),/ssh/i);
@@ -264,4 +269,67 @@ test('UI 页面覆盖 Epic-2 设备表单与 RISK 契约',()=>{
  assert.ok(!/\bconsole\.(log|info|debug|warn|error)\s*\(/.test(app));
  assert.ok(!/<script\b(?![^>]*\bsrc\s*=)/i.test(html),'不得内联脚本');
  assert.ok(!/\bon[a-z]+\s*=\s*"/i.test(html),'不得内联事件处理器');
+});
+
+test('UI remote writability comes from snapshot.writeEnabled, never from kind alone',()=>{
+ const local={device:{kind:'local'},writeEnabled:true};
+ const localReadOnly={device:{id:'local',kind:'local'},writeEnabled:false};
+ const agentReadOnly={device:{id:'a',kind:'agent'},writeEnabled:false};
+ const http={device:{id:'h',kind:'http'},writeEnabled:false};
+ const ssh={device:{id:'s',kind:'ssh'},writeEnabled:false};
+ const agentWritable={device:{id:'a',kind:'agent'},writeEnabled:true};
+ assert.deepEqual(snapshotMode(undefined),{text:'未连接',kind:''});
+ assert.deepEqual(snapshotMode(local),{text:'允许保存',kind:'good'});
+ assert.deepEqual(snapshotMode(localReadOnly),{text:'只读模式',kind:'purple'});
+ assert.deepEqual(snapshotMode(agentReadOnly),{text:'远程 · 只读',kind:'purple'});
+ assert.deepEqual(snapshotMode(http),{text:'远程 · 只读',kind:'purple'});
+ assert.deepEqual(snapshotMode(ssh),{text:'远程 · 只读',kind:'purple'});
+ assert.deepEqual(snapshotMode(agentWritable),{text:'远程 · 可写',kind:'good'});
+ assert.equal(snapshotWritable(agentWritable),true);
+ assert.equal(snapshotWritable(agentReadOnly),false);
+ assert.equal(snapshotWritable(undefined),false);
+ // 远程可写时 prepare/apply/backups 必须带 ?device=；本机不带。
+ assert.equal(deviceApiPath('/plans',''),'/plans');
+ assert.equal(deviceApiPath('/plans','local'),'/plans');
+ assert.equal(deviceApiPath('/plans','agent-1'),'/plans?device=agent-1');
+ assert.equal(deviceApiPath('/apply','agent-1'),'/apply?device=agent-1');
+ assert.equal(deviceApiPath('/backups','agent-1'),'/backups?device=agent-1');
+ assert.equal(deviceApiPath('/backups','local'),'/backups');
+ assert.equal(deviceApiPath('/backups','dev 1'),'/backups?device=dev%201');
+});
+test('UI hotLoad evidence wording never overstates a hot reload',()=>{
+ assert.equal(hotLoadMessage(undefined),'');
+ assert.equal(hotLoadMessage(null),'');
+ assert.match(hotLoadMessage({verified:true,checked:true}),/热加载已核实/);
+ assert.match(hotLoadMessage({verified:false,checked:true}),/热加载未核实/);
+ assert.match(hotLoadMessage({verified:false,checked:true}),/已检查日志/);
+ assert.match(hotLoadMessage({verified:false,checked:false}),/未检查日志/);
+ assert.doesNotMatch(hotLoadMessage({verified:false,checked:true,note:'末尾未见 reload'}),/热加载已核实|已热加载/);
+ assert.match(hotLoadMessage({verified:false,checked:true,note:'末尾未见 reload'}),/末尾未见 reload/);
+ assert.match(hotLoadMessage({verified:true}),/已核实/);
+});
+test('UI 远程可写错误码有可读文案',()=>{
+ assert.match(deviceErrorText('DEVICE_READ_ONLY'),/只读/);
+ assert.match(deviceErrorText('AGENT_READ_ONLY'),/Agent/);
+ assert.match(deviceErrorText('AGENT_READ_ONLY'),/enable-writes|写入/);
+});
+test('UI 页面覆盖 Epic-3 远程可写契约',()=>{
+ const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
+ const app=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');
+ for(const id of ['device-allow-write-field','device-allow-write','backup-actions']){
+  assert.ok(new RegExp(`id="${id}"`).test(html),`index.html 缺少 #${id}`);
+ }
+ assert.match(html,/id="device-allow-write"[^>]*type="checkbox"/,'允许远程写入必须是 checkbox');
+ assert.ok(app.includes('deviceApiPath'),'远程写请求必须带 device 参数');
+ assert.ok(app.includes("deviceApiPath('/plans',selectedDevice)"),'prepare 必须使用 /plans?device=');
+ assert.ok(app.includes("deviceApiPath('/apply',selectedDevice)"),'apply 必须使用 /apply?device=');
+ assert.ok(app.includes("deviceApiPath('/backups',selectedDevice)"),'远程备份必须使用 /backups?device=');
+ assert.ok(app.includes('hotLoadMessage'),'apply 必须展示 hotLoad 证据');
+ assert.ok(app.includes('snapshotMode'),'模式必须来自 snapshot.writeEnabled');
+ assert.ok(app.includes('snapshotWritable'),'可写判断必须来自 snapshot.writeEnabled');
+ assert.match(app,/\$\('device-allow-write'\)\.checked=false/,'提交后必须重置允许写入勾选');
+ assert.ok(!/localStorage/.test(app));
+ assert.ok(!/\bconsole\.(log|info|debug|warn|error)\s*\(/.test(app));
+ assert.ok(!/<script\b(?![^>]*\bsrc\s*=)/i.test(html));
+ assert.ok(!/\bon[a-z]+\s*=\s*"/i.test(html));
 });

@@ -10,7 +10,7 @@ import {spawn} from 'node:child_process';
 import {Gateway} from './gateway.mjs';
 import {Engine,knownError} from './engine.mjs';
 import {HttpGatewayAdapter} from './http-adapter.mjs';
-import {addDevice,getSecret,listDevices,loadRegistry,removeDevice,validateDevice} from './devices.mjs';
+import {addDevice,getSecret,listDevices,loadRegistry,migrateSecrets,removeDevice,validateDevice} from './devices.mjs';
 import * as backupModule from './backup.mjs';
 import {logDiagnostic,readDiagnostics} from './diagnostics.mjs';
 import {ASTRBOT_DATA_REQUIRED,discoverAstrBotData,findLegacyState,resolveStateDir} from './config.mjs';
@@ -40,9 +40,10 @@ function decodeSegment(value){
 /** HTTP status for a stable device error code; null means "not a device error". */
 function deviceErrorStatus(error){
   const code=error?.code;
-  if(typeof code!=='string'||!code.startsWith('DEVICE_'))return null;
+  if(typeof code!=='string'||!code.startsWith('DEVICE_')&&code!=='AGENT_READ_ONLY')return null;
   if(code==='DEVICE_NOT_FOUND')return 404;
   if(code==='DEVICE_INVALID'||code==='DEVICE_SECRET_REQUIRED')return 400;
+  if(code==='DEVICE_READ_ONLY'||code==='AGENT_READ_ONLY')return 403;
   return 409;
 }
 
@@ -166,6 +167,41 @@ function publicRestorePlan(plan){
   if(typeof plan?.impact==='string'&&plan.impact.length>0&&plan.impact.length<=200)view.impact=plan.impact;
   if(typeof plan?.warning==='string'&&plan.warning.length>0&&plan.warning.length<=500)view.warning=plan.warning;
   return view;
+}
+
+/** Remote agent plan view: same reviewed top-level fields as a local plan, no engine internals. */
+function publicPlan(plan){
+  const view={};
+  if(typeof plan?.id==='string'&&PLAN_ID.test(plan.id))view.id=plan.id;
+  const resource=parseResource(plan?.resource);
+  if(resource)view.resource=resource;
+  if(typeof plan?.revision==='string'&&/^[A-Za-z0-9._:-]{1,128}$/.test(plan.revision))view.revision=plan.revision;
+  view.changes=publicChanges(plan?.changes);
+  if(typeof plan?.expiresAt==='string'&&plan.expiresAt.length<=40)view.expiresAt=plan.expiresAt;
+  if(typeof plan?.impact==='string'&&plan.impact.length>0&&plan.impact.length<=200)view.impact=plan.impact;
+  if(typeof plan?.warning==='string'&&plan.warning.length>0&&plan.warning.length<=500)view.warning=plan.warning;
+  return view;
+}
+
+/** Evidence text from the remote log can contain local paths; redact them before display. */
+function redactEvidenceText(value,limit){
+  return String(value)
+    .replace(/[\u0000-\u001f\u007f]/g,' ')
+    .replace(/\b[A-Za-z]:[\\/][^\s"'<>]*/g,'[path]')
+    .replace(/\\\\[^\s"'<>]*/g,'[path]')
+    .replace(/(^|[\s"'=(:,])\/[^\s"'<>]*/g,'$1[path]')
+    .replace(/\s+/g,' ')
+    .trim()
+    .slice(0,limit);
+}
+
+/** hotLoad evidence: booleans only plus redacted note/marker; never absolute paths. */
+function publicHotLoad(value){
+  if(!value||typeof value!=='object')return {verified:false,checked:false};
+  const evidence={verified:value.verified===true,checked:value.checked===true};
+  if(typeof value.note==='string'&&value.note)evidence.note=redactEvidenceText(value.note,300);
+  if(typeof value.marker==='string'&&value.marker)evidence.marker=redactEvidenceText(value.marker,200);
+  return evidence;
 }
 
 /** Backup limits reported by GET /backups; MODEL_CONSOLE_BACKUP_MAX_MB is the byte cap source. */
@@ -304,7 +340,9 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
     const remote=await remoteEngine(device);
     const snapshot=await remote.snapshot();
     if(!snapshot||typeof snapshot!=='object'||Array.isArray(snapshot))throw codeError('DEVICE_INVALID_RESPONSE','远程快照无效');
-    const value={...snapshot,writeEnabled:false,device:{id:device.id,name:device.name,kind:device.kind??'http'}};
+    // Only a writable agent device may write, and only when the agent itself runs with --enable-writes.
+    const writable=device.kind==='agent'&&device.readOnly===false&&snapshot.writeEnabled===true;
+    const value={...snapshot,writeEnabled:writable,device:{id:device.id,name:device.name,kind:device.kind??'http'}};
     remoteSnapshots.set(device.id,{at:Date.now(),value});
     return value;
   };
@@ -328,6 +366,56 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
     // HttpGatewayAdapter reports {reachable,latencyMs}; AgentAdapter.health reports {status:'ok',version}.
     if(result.reachable===undefined&&result.status==='ok')return {reachable:true,latencyMs:Date.now()-started};
     return result;
+  };
+
+  /* ---- Remote write routing (Epic-3): only writable agent devices ---- */
+  /** Resolve a device that may be written remotely; everything else is DEVICE_READ_ONLY. */
+  const agentWriteDevice=async id=>{
+    const device=await findDevice(id);
+    if(!device)throw codeError('DEVICE_NOT_FOUND','设备不存在');
+    if(device.kind!=='agent'||device.readOnly!==false)throw codeError('DEVICE_READ_ONLY','只有可写 agent 设备支持远程写入');
+    return device;
+  };
+  const agentBackupsDevice=async id=>{
+    const device=await findDevice(id);
+    if(!device)throw codeError('DEVICE_NOT_FOUND','设备不存在');
+    if(device.kind!=='agent')throw codeError('DEVICE_READ_ONLY','只有 agent 设备支持远程备份');
+    return device;
+  };
+  const agentAdapterFor=async device=>{
+    const remote=await remoteEngine(device);
+    return remote?.gateway&&typeof remote.gateway==='object'?remote.gateway:null;
+  };
+  const requireAgentMethod=(adapter,method)=>{
+    if(!adapter||typeof adapter[method]!=='function')throw codeError('DEVICE_WRITE_UNAVAILABLE',`Agent 不支持远程 ${method}()`);
+    return adapter;
+  };
+  const remoteAgentPlan=async(device,body)=>{
+    const adapter=requireAgentMethod(await agentAdapterFor(device),'plan');
+    const plan=await adapter.plan({resource:body.resource,changes:body.changes,expectedRevision:body.expectedRevision});
+    if(!plan||typeof plan!=='object'||Array.isArray(plan))throw codeError('DEVICE_INVALID_RESPONSE','Agent 返回的计划无效');
+    return publicPlan(plan);
+  };
+  const remoteAgentApply=async(device,body)=>{
+    const adapter=requireAgentMethod(await agentAdapterFor(device),'apply');
+    const applied=await adapter.apply(body.id);
+    if(!applied||typeof applied!=='object'||Array.isArray(applied))throw codeError('DEVICE_INVALID_RESPONSE','Agent 返回的应用结果无效');
+    const result=applied.result&&typeof applied.result==='object'&&!Array.isArray(applied.result)?applied.result:applied;
+    const view=safeApplyResult(result);
+    if(applied.hotLoad!==undefined)view.hotLoad=publicHotLoad(applied.hotLoad);
+    return view;
+  };
+  const remoteAgentBackups=async device=>{
+    const adapter=requireAgentMethod(await agentAdapterFor(device),'backups');
+    const payload=await adapter.backups();
+    const backups=(Array.isArray(payload?.backups)?payload.backups:[]).map(publicBackup).filter(Boolean);
+    const stats=payload?.stats&&typeof payload.stats==='object'
+      ?{count:Number.isInteger(payload.stats.count)?payload.stats.count:backups.length,bytes:Number.isFinite(payload.stats.bytes)?Math.max(0,Math.floor(payload.stats.bytes)):0}
+      :{count:backups.length,bytes:0};
+    const remoteLimits=payload?.limits&&typeof payload.limits==='object'?payload.limits:{};
+    const keep=Number.isInteger(remoteLimits.keep)&&remoteLimits.keep>0?remoteLimits.keep:DEFAULT_BACKUP_LIMITS.keep;
+    const maxBytes=typeof remoteLimits.maxBytes==='number'&&Number.isFinite(remoteLimits.maxBytes)?Math.max(0,Math.floor(remoteLimits.maxBytes)):DEFAULT_BACKUP_LIMITS.maxBytes;
+    return {backups,stats,limits:{keep,maxBytes}};
   };
 
   /** RISK-07: surface the most recent BACKUP_* diagnostics as backup warnings. */
@@ -386,6 +474,8 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
       }
       if(req.method==='GET'&&url.pathname==='/capabilities'){const id=url.searchParams.get('provider_id');if(!id||id.length>512)return send(400,{error:'INVALID_PROVIDER_ID'});const levels=await engine.gateway.efforts(id);return send(200,{levels:Array.isArray(levels)?levels:[],verified:Array.isArray(levels)});}
       if(req.method==='GET'&&url.pathname==='/backups'){
+        const backupDevice=url.searchParams.get('device');
+        if(backupDevice&&backupDevice!=='local')return send(200,await remoteAgentBackups(await agentBackupsDevice(backupDevice)));
         const backups=await engine.listBackups();
         const stats=await backupStats();
         const keep=Number.isInteger(limits?.keep)&&limits.keep>0?limits.keep:DEFAULT_BACKUP_LIMITS.keep;
@@ -420,8 +510,16 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
         let body;
         try{body=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{return send(400,{error:'INVALID_JSON'});}
         if(!body||typeof body!=='object'||Array.isArray(body))return send(400,{error:'INVALID_BODY'});
-        if(url.pathname==='/plans')return send(200,await engine.plan(body.resource,body.changes,false,body.expectedRevision));
-        if(url.pathname==='/apply')return send(200,safeApplyResult(await engine.apply(body.id)));
+        if(url.pathname==='/plans'){
+          const planDevice=url.searchParams.get('device');
+          if(planDevice&&planDevice!=='local')return send(200,await remoteAgentPlan(await agentWriteDevice(planDevice),body));
+          return send(200,await engine.plan(body.resource,body.changes,false,body.expectedRevision));
+        }
+        if(url.pathname==='/apply'){
+          const applyDevice=url.searchParams.get('device');
+          if(applyDevice&&applyDevice!=='local')return send(200,await remoteAgentApply(await agentWriteDevice(applyDevice),body));
+          return send(200,safeApplyResult(await engine.apply(body.id)));
+        }
         if(url.pathname==='/backups/prune'){
           let keep;
           if(body.keep!==undefined){
@@ -446,11 +544,13 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
         if(url.pathname==='/devices'){
           if(!registryDir)throw codeError('DEVICE_STORE_UNAVAILABLE','设备存储不可用');
           const kind=typeof body.kind==='string'?body.kind:'http';
+          // Remote writes are only offered by agent devices; http/ssh always stay read-only.
+          const readOnly=kind==='agent'?body.readOnly!==false:true;
           const input={
             name:body.name,
             baseUrl:body.baseUrl,
             kind,
-            ...(typeof body.readOnly==='boolean'?{readOnly:body.readOnly}:{}),
+            readOnly,
             ...(kind==='ssh'?{ssh:body.ssh}:{}),
           };
           // Validate and dedupe before pairing: a duplicate agent must not trigger another pair attempt.
@@ -519,6 +619,24 @@ function openInBrowser(url){
 }
 
 /**
+ * Best effort: protect legacy plaintext device secrets with DPAPI at startup.
+ * Failures keep the plaintext (never deleted) and are recorded as diagnostics only, so startup is never blocked.
+ */
+async function migrateDeviceSecrets(stateDir){
+  try{
+    const report=await migrateSecrets(stateDir);
+    const migrated=Array.isArray(report?.migrated)?report.migrated:[];
+    const failed=Array.isArray(report?.failed)?report.failed:[];
+    const remaining=Number.isInteger(report?.plaintextRemaining)?report.plaintextRemaining:0;
+    if(migrated.length)await logDiagnostic(stateDir,{level:'info',event:'secrets-migrated',detail:`migrated ${migrated.length} secret(s)`});
+    if(failed.length)await logDiagnostic(stateDir,{level:'warn',event:'secrets-migration-failed',code:'SECRETS_MIGRATION_FAILED',detail:`failed ${failed.length}, plaintextRemaining ${remaining}`});
+    else if(remaining>0)await logDiagnostic(stateDir,{level:'warn',event:'secrets-migration-failed',code:'SECRETS_MIGRATION_FAILED',detail:`plaintextRemaining ${remaining}`});
+  }catch(error){
+    await logDiagnostic(stateDir,{level:'warn',event:'secrets-migration-failed',code:'SECRETS_MIGRATION_FAILED',detail:typeof error?.code==='string'?error.code:'OPERATION_FAILED'});
+  }
+}
+
+/**
  * Start the console: resolve state, acquire the single-instance lock, discover AstrBot data, then listen.
  * Backup list/read functions are injected into the Engine, and backup retention warnings go to the
  * diagnostics journal instead of stderr. Expected configuration failures print a readable message,
@@ -539,6 +657,7 @@ export async function start({env=process.env,cwd=process.cwd(),argv=process.argv
     return null;
   }
   try{
+    await migrateDeviceSecrets(stateDir);
     const data=await resolveData(env);
     const resumeToken=env.MODEL_CONSOLE_SESSION_TOKEN;
     if(resumeToken&&!/^[a-f0-9]{64}$/.test(resumeToken))throw Error('INVALID_SESSION_TOKEN');

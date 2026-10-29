@@ -99,7 +99,12 @@ test('Epic-2 SSH：注入隧道完成创建/健康/快照/删除关闭，公开�
     const registry=await readFile(join(stateDir,'devices.json'),'utf8');
     assert.match(registry,/id_ed25519/,'内部 ssh 配置仍需落库供连接使用');
     assert.doesNotMatch(registry,/abk_SSH_SECRET/);
-    assert.match(await readFile(join(stateDir,'secrets.json'),'utf8'),/abk_SSH_SECRET/);
+    // §9.3：DPAPI 可用时落 dpapi:<base64>；不可用时降级明文（都不得出现在响应/日志）。
+    const sshSecrets=await readFile(join(stateDir,'secrets.json'),'utf8');
+    const sshStored=Object.values(JSON.parse(sshSecrets).secrets??{});
+    assert.ok(sshStored.length>=1);
+    if(sshStored.every(value=>typeof value==='string'&&value.startsWith('dpapi:')))assert.doesNotMatch(sshSecrets,/abk_SSH_SECRET/);
+    else assert.match(sshSecrets,/abk_SSH_SECRET/);
     // 健康检查走同一隧道；只回 reachable/latencyMs/error。
     const health=await (await fetch(`${base}/devices/${device.id}/health`,{headers:AUTH})).json();
     assert.deepEqual(health,{reachable:true,latencyMs:5});
@@ -186,15 +191,23 @@ test('Epic-2 Agent：真实 startAgent + 真实 createServer 配对→快照→�
       assert.equal('pairingCode' in device,false);
       assert.doesNotMatch(JSON.stringify(device),/token|pairingCode/i);
       const secretsText=await readFile(join(stateDir,'secrets.json'),'utf8');
-      const token=JSON.parse(secretsText).secrets[device.id];
-      assert.match(token,/^[a-f0-9]{64}$/);
+      const storedSecret=JSON.parse(secretsText).secrets[device.id];
       const registryText=await readFile(join(stateDir,'devices.json'),'utf8');
-      assert.doesNotMatch(registryText,new RegExp(token));
-      assert.doesNotMatch(registryText,new RegExp(agent.pairingCode));
       const after=JSON.parse(await readFile(join(agentState,'agent.json'),'utf8'));
-      assert.equal(after.tokenHash,sha256(token),'hub 保存的 token 必须与 agent 侧哈希一致');
+      if(storedSecret.startsWith('dpapi:')){
+        // DPAPI 可用：hub 侧只有密文，无法在此解出 token 与 agent 哈希比对；只断言两侧都是合法形态。
+        assert.match(storedSecret,/^dpapi:[A-Za-z0-9+/]+={0,2}$/);
+        assert.match(after.tokenHash,/^[a-f0-9]{64}$/);
+        assert.doesNotMatch(secretsText,new RegExp(after.tokenHash));
+      }else{
+        const token=storedSecret;
+        assert.match(token,/^[a-f0-9]{64}$/);
+        assert.equal(after.tokenHash,sha256(token),'hub 保存的 token 必须与 agent 侧哈希一致');
+        assert.doesNotMatch(await readFile(join(agentState,'agent.json'),'utf8'),new RegExp(token));
+      }
+      assert.doesNotMatch(registryText,new RegExp(agent.pairingCode));
+      assert.doesNotMatch(registryText,new RegExp(storedSecret));
       assert.equal(after.pairing,null,'配对码一次使用后失效');
-      assert.doesNotMatch(await readFile(join(agentState,'agent.json'),'utf8'),new RegExp(token));
 
       // 重复设备在配对前被拒：不得再次消耗 agent 配对状态。
       response=await fetch(base+'/devices',{method:'POST',headers:JSON_HEADERS,body:JSON.stringify({name:'Agent 2',kind:'agent',baseUrl:agent.url,pairingCode:agent.pairingCode})});

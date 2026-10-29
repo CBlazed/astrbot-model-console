@@ -61,6 +61,25 @@ export function saveDevice(storage,id){
 }
 /** Snapshot URL: local (or no selection) never sends a device parameter. */
 export function snapshotPath(deviceId){return deviceId&&deviceId!=='local'?`/snapshot?device=${encodeURIComponent(deviceId)}`:'/snapshot';}
+/** Any Hub endpoint scoped to the selected device; local (or no selection) keeps the plain local path. */
+export function deviceApiPath(path,deviceId){return deviceId&&deviceId!=='local'?`${path}?device=${encodeURIComponent(deviceId)}`:path;}
+/** Writable snapshots are authoritative: remote agents are only enabled by snapshot.writeEnabled. */
+export function snapshotWritable(snapshot){return snapshot?.writeEnabled===true;}
+/** Header mode label: remote writable agents get “远程 · 可写”, everything else stays read-only. */
+export function snapshotMode(snapshot){
+ if(!snapshot)return {text:'未连接',kind:''};
+ const remote=isRemoteSnapshot(snapshot),writable=snapshotWritable(snapshot);
+ if(remote)return writable?{text:'远程 · 可写',kind:'good'}:{text:'远程 · 只读',kind:'purple'};
+ return writable?{text:'允许保存',kind:'good'}:{text:'只读模式',kind:'purple'};
+}
+/** Hot-load evidence from Agent apply: never claim success without verified log evidence. */
+export function hotLoadMessage(hotLoad){
+ if(!hotLoad||typeof hotLoad!=='object')return '';
+ const note=typeof hotLoad.note==='string'&&hotLoad.note.trim()?`：${hotLoad.note.trim()}`:'';
+ if(hotLoad.verified===true)return `热加载已核实（日志出现重载标记）${note}`;
+ if(hotLoad.checked===true)return `热加载未核实（已检查日志，未见重载标记）${note}`;
+ return `热加载未核实（未检查日志）${note}`;
+}
 /** A remote snapshot is read-only; missing device means the legacy local view. Epic-2: ssh/agent are remote too. */
 export function isRemoteSnapshot(snapshot){const kind=snapshot?.device?.kind;return typeof kind==='string'&&kind.length>0&&kind!=='local';}
 /** Normalized device kind: legacy records without kind are http, 'local' is the built-in local device. */
@@ -82,7 +101,7 @@ export function healthBadge(health){
  return {text:typeof health.error==='string'&&health.error?health.error:'不可达',kind:'bad'};
 }
 /** Readable device errors; empty string means the code is not device-related. */
-export const deviceErrors={DEVICE_AUTH_FAILED:'远程设备凭据无效或已被撤销，请在设备设置中更新 OpenAPI Key。',DEVICE_FORBIDDEN:'远程设备缺少所需权限（scope），请检查 OpenAPI Key 的授权范围。',DEVICE_UNREACHABLE:'远程设备不可达，请确认目标机 AstrBot 正在运行且地址可访问。',DEVICE_NOT_FOUND:'设备不存在，可能已被删除。',DEVICE_INVALID:'设备信息不合法，请检查名称与地址。',DEVICE_SECRET_REQUIRED:'添加 HTTP/SSH 设备需要 OpenAPI Key。',DEVICE_EXISTS:'设备已存在（同类型且地址相同），请换一个名称或地址。',DEVICE_INVALID_RESPONSE:'远程设备返回了无法解析的响应。',DEVICE_API_REJECTED:'远程 AstrBot 拒绝了该请求。',DEVICE_SSH_UNAVAILABLE:'本机未找到 ssh 命令，无法建立 SSH 隧道。',DEVICE_SSH_FAILED:'SSH 隧道建立或转发失败，请检查主机、端口、用户与私钥路径。',DEVICE_PORT_UNKNOWN:'无法从远端日志发现 dashboard 端口，请确认远端数据目录，或在地址中直接填写端口。',AGENT_UNREACHABLE:'Agent 不可达，请确认 Agent 进程正在运行且地址与端口正确。',AGENT_PAIR_FAILED:'Agent 配对失败，请检查配对码是否有效（一次性、10 分钟内有效）。',AGENT_AUTH_FAILED:'Agent 设备令牌无效或已失效，请删除设备后重新配对。',AGENT_TOKEN_EXPIRED:'Agent 设备令牌已过期，请重新配对。',AGENT_INVALID_RESPONSE:'Agent 返回了无法解析的响应。',DEVICE_NAME_REQUIRED:'请填写设备名称。',DEVICE_BASEURL_REQUIRED:'请填写设备地址（baseUrl）。',DEVICE_PAIRING_REQUIRED:'请填写 Agent 配对码。',DEVICE_SSH_HOST_REQUIRED:'SSH 设备需要填写主机地址。',DEVICE_SSH_USER_REQUIRED:'SSH 设备需要填写登录用户。'};
+export const deviceErrors={DEVICE_AUTH_FAILED:'远程设备凭据无效或已被撤销，请在设备设置中更新 OpenAPI Key。',DEVICE_FORBIDDEN:'远程设备缺少所需权限（scope），请检查 OpenAPI Key 的授权范围。',DEVICE_UNREACHABLE:'远程设备不可达，请确认目标机 AstrBot 正在运行且地址可访问。',DEVICE_NOT_FOUND:'设备不存在，可能已被删除。',DEVICE_INVALID:'设备信息不合法，请检查名称与地址。',DEVICE_SECRET_REQUIRED:'添加 HTTP/SSH 设备需要 OpenAPI Key。',DEVICE_EXISTS:'设备已存在（同类型且地址相同），请换一个名称或地址。',DEVICE_INVALID_RESPONSE:'远程设备返回了无法解析的响应。',DEVICE_API_REJECTED:'远程 AstrBot 拒绝了该请求。',DEVICE_SSH_UNAVAILABLE:'本机未找到 ssh 命令，无法建立 SSH 隧道。',DEVICE_SSH_FAILED:'SSH 隧道建立或转发失败，请检查主机、端口、用户与私钥路径。',DEVICE_PORT_UNKNOWN:'无法从远端日志发现 dashboard 端口，请确认远端数据目录，或在地址中直接填写端口。',AGENT_UNREACHABLE:'Agent 不可达，请确认 Agent 进程正在运行且地址与端口正确。',AGENT_PAIR_FAILED:'Agent 配对失败，请检查配对码是否有效（一次性、10 分钟内有效）。',AGENT_AUTH_FAILED:'Agent 设备令牌无效或已失效，请删除设备后重新配对。',AGENT_TOKEN_EXPIRED:'Agent 设备令牌已过期，请重新配对。',AGENT_INVALID_RESPONSE:'Agent 返回了无法解析的响应。',DEVICE_READ_ONLY:'该设备为只读，不能执行写入操作。',AGENT_READ_ONLY:'Agent 端未启用写入（--enable-writes），无法保存；请先在 Agent 侧开启写入。',DEVICE_NAME_REQUIRED:'请填写设备名称。',DEVICE_BASEURL_REQUIRED:'请填写设备地址（baseUrl）。',DEVICE_PAIRING_REQUIRED:'请填写 Agent 配对码。',DEVICE_SSH_HOST_REQUIRED:'SSH 设备需要填写主机地址。',DEVICE_SSH_USER_REQUIRED:'SSH 设备需要填写登录用户。'};
 export function deviceErrorText(code){return typeof code==='string'?deviceErrors[code]??'':'';}
 /** Validate the device form and build the POST /devices payload (kind defaults to http for legacy forms). */
 export function validateDeviceInput(input){
@@ -90,6 +109,7 @@ export function validateDeviceInput(input){
  const name=typeof input?.name==='string'?input.name.trim():'';
  const baseUrl=typeof input?.baseUrl==='string'?input.baseUrl.trim():'';
  const errors=[],payload={name,kind,baseUrl};
+ payload.readOnly=kind==='agent'?input?.allowWrite!==true:true;
  if(!name)errors.push('DEVICE_NAME_REQUIRED');
  if(!baseUrl)errors.push('DEVICE_BASEURL_REQUIRED');
  const apiKey=typeof input?.apiKey==='string'?input.apiKey.trim():'';

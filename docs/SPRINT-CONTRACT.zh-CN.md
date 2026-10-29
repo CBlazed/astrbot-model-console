@@ -144,3 +144,47 @@ Lead 负责：`README.md`、`docs/HANDOVER.zh-CN.md`、`docs/BACKLOG-2026-10-29.
 | auditor-p0 | `test/epic2-integration.test.mjs`、`docs/EPIC2-AUDIT-2026-10-29.md` |
 
 Lead：契约、README/HANDOVER/BACKLOG、真实浏览器/冒烟/SIGINT 验证、工作记录、git 提交。
+
+## 9. 第二阶段契约（远程写侧 / DPAPI / 真实浏览器）
+
+### 9.1 Agent 写端点（仅 `--enable-writes` 时开放）
+
+| 方法/路径 | 说明 |
+|---|---|
+| `POST /agent/v1/plans` | body `{resource,changes,expectedRevision?}` → 本机 `engine.plan()` 返回（含 id/changes/warning/expiresAt）；只读模式 403 `AGENT_READ_ONLY` |
+| `POST /agent/v1/apply` | body `{id}` → 本机 `engine.apply()`；失败返回 `{error,details}` + 状态码 409；成功额外 `hotLoad` 证据对象 |
+| `GET /agent/v1/backups` | `{backups,stats,limits}`；Agent 的备份目录为 `<state>/backups`，Engine 注入 `listBackups/readBackupResource`。只读 Agent 也可列备份（不暴露密钥）；写操作仍 403 |
+
+`hotLoad` 证据：apply 后读取本机 `<data>/logs/astrbot.log` 尾部（最多 200 行），检测 `reload`/`hot reload`/`热重载` 等标记；只有命中才 `verified:true`，否则 `verified:false, checked:true, note`。不得声称“已热加载”而没证据。
+
+### 9.2 Hub 远程写（仅 agent 设备且设备 `readOnly:false`）
+
+- `POST /devices` 增加可选 `readOnly:false`；agent 设备是否可写同时取决于 Agent 端 `writeEnabled`。
+- `GET /snapshot?device=`：agent 快照 `writeEnabled = device.readOnly===false && agentSnapshot.writeEnabled`；http/ssh 恒 false。
+- `POST /plans?device=<id>`、`POST /apply?device=<id>`：仅 agent 设备；代理到 Agent 对应端点，id 直接透传；http/ssh 或只读设备 → 403 `DEVICE_READ_ONLY`；未知设备 404。
+- `GET /backups?device=<id>`：agent 设备（含只读 agent）代理 Agent 备份列表；http/ssh 403；无 device 保持本机。
+- 远程写不改变本地流程；本地 `/plans`、`/apply` 行为不变。
+
+### 9.3 DPAPI 加密 secrets（RISK-11）
+
+- 新 `src/secure-store.mjs`：`protect(value)` / `unprotect(blob)`，Windows 用 PowerShell DPAPI（`ProtectedData`，CurrentUser），值和密文只走 stdin/stdout base64，**不放进命令行参数**；非 Windows/失败抛 `SECURE_STORE_UNAVAILABLE`。
+- `devices.mjs` 的 `secrets.json` 改为 `{version:2,secrets:{<deviceId>:"dpapi:<base64>"}}`；读取时自动解 DPAPI，兼容旧明文（首次读取后可迁移）。
+- 迁移：`loadRegistry` 后提供 `migrateSecrets(stateDir)`（显式调用或首启自动），失败不删除旧明文。
+- 测试：注入 fake runner 验证 protect/unprotect 分支、明文兼容、迁移、失败降级；不实际写用户 APPDATA。
+
+### 9.4 真实浏览器
+
+- 用 Chrome/Edge headless（`--headless=new --dump-dom --virtual-time-budget` + `--screenshot`）加载真实 console + fake AstrBot 数据；断言页面渲染出模型工作台/卡片/设备选择/向导，并截图存档到 `docs/assets/`（或工作区 `.tmp` 后提交必要截图）。
+- 浏览器验收不是单元测试，报告放 `docs/EPIC3-AUDIT-...` 或工作记录。
+
+### 9.5 写作用域（第二阶段）
+
+| Worker | 独占文件 |
+|---|---|
+| server-diag | `src/agent.mjs`、`src/agent-adapter.mjs`、`test/agent.test.mjs`、`test/agent-adapter.test.mjs` |
+| backend-platform | `src/server.mjs`、`test/server-ui.test.mjs`、`test/server-devices.test.mjs` |
+| frontend-token | `public/*`、`test/ui.test.mjs`、`test/a11y.test.mjs` |
+| engine-restore | `src/secure-store.mjs`（新建）、`src/devices.mjs`、`test/secure-store.test.mjs`、`test/devices.test.mjs` |
+| auditor-p0 | `test/phase3-integration.test.mjs`、`docs/PHASE3-AUDIT-2026-10-29.md` |
+
+Lead：契约、真实浏览器、文档、工作记录、git。
