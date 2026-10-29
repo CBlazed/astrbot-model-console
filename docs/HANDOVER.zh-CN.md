@@ -93,8 +93,11 @@
 | `src/diagnostics.mjs` | 诊断日志（1 MiB 滚动、保留 3 份、脱敏、失败静默） | 不得记录 token/key/请求体/绝对路径 |
 | `src/devices.mjs` | 远程设备注册表 + 密钥分离存储（devices.json / secrets.json） | 响应/日志/诊断不得出现 apiKey；读写 state 用临时文件+rename |
 | `src/http-adapter.mjs` | 远程 AstrBot OpenAPI v1 适配器（Bearer API Key） | 只走 `/api/v1/`；错误映射 DEVICE_*；远程只读 |
+| `src/ssh-tunnel.mjs` | SSH 设备隧道：`-N -L`、远端日志端口发现、就绪轮询、幂等 close | 只传参数数组不拼 shell；错误映射 DEVICE_SSH_*/DEVICE_PORT_UNKNOWN |
+| `src/agent.mjs` | Agent 进程：127.0.0.1、一次性配对码、token 哈希存储、`/agent/v1/health|pair|snapshot` | 不存明文 token；配对码一次性+限频；默认只读 |
+| `src/agent-adapter.mjs` | Hub 侧 Agent 配对与快照适配器 | 不记录/回传 token；错误映射 AGENT_* |
 | `src/inspect.mjs` | 只读实际实例快照 | 不引入隐藏写操作或生成调用 |
-| `scripts/build-package.mjs` | 便携包/zip/Inno 脚本生成、SHA256SUMS | 只按白名单复制，排除 state/.git/.tmp/日志/测试 |
+| `scripts/build-package.mjs` | 便携包/zip 生成、SHA256SUMS（无安装器/自动更新） | 只按白名单复制，排除 state/.git/.tmp/日志/测试 |
 | `public/index.html` / `styles.css` | UI 结构与视觉样式 | 选中态、响应式、焦点和错误状态 |
 | `public/app.mjs` | DOM、刷新、草稿、预览、顺序保存 | 使用 textContent；不能插入配置为 HTML |
 | `public/ui-state.mjs` | 可测试的草稿、分组、候选模型、身份卡片、冲突 diff、设备选择、token 持久化 | 维持 bot view 与 profile resource 的区别 |
@@ -258,6 +261,10 @@ node --test --test-isolation=none   # 受限沙箱里 node --test 会因 spawn E
 .\start-console.cmd
 # 需要编辑时才使用：
 .\start-console-edit.cmd
+# 远程 Agent（可选；给 Hub 配对用，只读）：
+node src/agent.mjs --port=0 --state=<state目录>
+# 便携包：
+node scripts/build-package.mjs [--zip]
 ```
 
 | 变量/参数 | 作用 |
@@ -293,7 +300,7 @@ node --test --test-isolation=none   # 受限沙箱里 node --test 会因 spawn E
 
 ## 12. 测试与证据分级
 
-接手运行 `node --test --test-isolation=none`（受限沙箱里 `node --test` 会因 spawn EPERM 失败；正常环境可省略参数）。2026-10-29 Sprint A/B/C + 审计后基线是 **192 项**（以当次结果为准）。
+接手运行 `node --test --test-isolation=none`（受限沙箱里 `node --test` 会因 spawn EPERM 失败；正常环境可省略参数）。2026-10-29 Epic-2/3 审计后基线是 **253 项**（以当次结果为准）。
 
 | 测试文件 | 重点 |
 |---|---|
@@ -304,10 +311,12 @@ node --test --test-isolation=none   # 受限沙箱里 node --test 会因 spawn E
 | gateway.test.mjs | 端口/配置缓存、并发去重、routingSummary |
 | diagnostics.test.mjs | 白名单、脱敏、滚动、并发有序 |
 | devices.test.mjs / http-adapter.test.mjs | 设备注册表密钥分离、OpenAPI Key 适配器与错误码 |
-| ui.test.mjs | 草稿、分组、冲突 diff、token、设备选择器/恢复契约 |
-| a11y.test.mjs | 字号、对比度、可访问名、skip link、设备表单 |
+| ssh-tunnel.test.mjs | SSH argv/端口发现/就绪/超时/ENOENT/close 幂等 |
+| agent.test.mjs / agent-adapter.test.mjs | Agent 配对/限频/过期/token 哈希/快照鉴权；Hub 侧适配器错误映射 |
+| ui.test.mjs | 草稿、分组、冲突 diff、token、设备选择器（HTTP/SSH/Agent）/恢复契约 |
+| a11y.test.mjs | 字号、对比度、可访问名、skip link、设备表单、诊断导出 |
 | config.test.mjs / lock.test.mjs | state 优先级、数据发现、单实例锁 |
-| p0-integration.test.mjs / sprint-integration.test.mjs | P0 与 Sprint 的跨模块集成回归 |
+| p0-integration.test.mjs / sprint-integration.test.mjs / epic2-integration.test.mjs | P0、Sprint、Epic-2/3 的跨模块集成回归 |
 
 现有自动测试不是真实浏览器视觉或端到端点击测试。当前工具环境无浏览器自动化入口时必须说明，不能把DOM逻辑测试说成屏幕验收。
 
@@ -342,9 +351,12 @@ node --test --test-isolation=none   # 受限沙箱里 node --test 会因 spawn E
 6. ~~控制台单实例管理和启动器改进。~~ **P0 已部分修**：单实例锁与令牌刷新存活已完成；`active-service.json` 索引过期、启动器仍待改进。
 7. ~~更完整的错误诊断与只读操作日志。~~ **Sprint A 已做**：`diagnostics.jsonl` 脱敏滚动；未做限流与只读操作全量审计。
 8. ~~有上限的资源并发读取和身份元数据缓存。~~ **Sprint A 已做**：gateway 缓存 + 并发去重；身份元数据仍是顺序读取。
-9. UI 端到端、键盘和响应式视觉验收仍未做；当前只有静态 a11y + DOM 契约测试。
-10. 远程设备目前只读：`/plans`、`/apply` 未按 device 路由；SSH 隧道/Agent 未实现（Epic-1 写侧、Epic-2）。
-11. 打包：便携包与 zip 已可构建；Inno 安装器未在本机编译验证，自动更新未做（Epic-3）。
+7. ~~更完整的错误诊断与只读操作日志。~~ **Sprint A 已做**：`diagnostics.jsonl` 脱敏滚动 + 120/min 限频 + UI 导出；未做只读操作全量审计。
+8. ~~有上限的资源并发读取和身份元数据缓存。~~ **Sprint A 已做**：gateway 缓存 + 并发去重；身份元数据仍是顺序读取。
+9. UI 端到端、键盘和响应式视觉验收仍未做；当前只有静态 a11y + DOM 契约测试。真实浏览器在本沙箱因 Chromium 命名管道 IPC 被拒，需在沙箱外补。
+10. 远程设备（HTTP/SSH/Agent）目前只读：`/plans`、`/apply` 未按 device 路由；Agent 本地备份索引、热加载日志验证未做。
+11. 便携包与 zip 已可构建并验证 SHA；无安装器/自动更新（Epic-3 只做便携 node）。未在无 Node 的干净 Windows 上独立启动验证。
+12. RISK-11：设备 API Key 明文存 `secrets.json`（仅用户目录权限）；未做 DPAPI 加密，分发时需提示。真实 SSH/远端 AstrBot 端到端、SIGINT 锁释放仍未验证。
 
 ## 15. 修改后的交付要求
 
@@ -362,5 +374,6 @@ node --test --test-isolation=none   # 受限沙箱里 node --test 会因 spawn E
 - `2026-10-29-模型控制台评审与多设备设计.md`
 - `2026-10-29-模型控制台P0修复.md`
 - `2026-10-29-模型控制台SprintABC.md`
+- `2026-10-29-模型控制台Epic2.md`
 
 历史记录是证据线索，不是当前状态真源。遇到与本文或源码不一致的旧结论，以现场接口和源码核实后更新文档。

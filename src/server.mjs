@@ -10,7 +10,7 @@ import {spawn} from 'node:child_process';
 import {Gateway} from './gateway.mjs';
 import {Engine,knownError} from './engine.mjs';
 import {HttpGatewayAdapter} from './http-adapter.mjs';
-import {addDevice,getSecret,listDevices,removeDevice} from './devices.mjs';
+import {addDevice,getSecret,listDevices,loadRegistry,removeDevice,validateDevice} from './devices.mjs';
 import * as backupModule from './backup.mjs';
 import {logDiagnostic,readDiagnostics} from './diagnostics.mjs';
 import {ASTRBOT_DATA_REQUIRED,discoverAstrBotData,findLegacyState,resolveStateDir} from './config.mjs';
@@ -26,6 +26,9 @@ const DIFF_ROUTE=/^\/backups\/([^/]+)\/diff$/;
 const DEVICE_HEALTH_ROUTE=/^\/devices\/([^/]+)\/health$/;
 const DEVICE_ROUTE=/^\/devices\/([^/]+)$/;
 const REMOTE_SNAPSHOT_TTL=5000;
+const DIAGNOSTICS_LIMIT_PER_MINUTE=120;
+const DIAGNOSTICS_WINDOW_MS=60*1000;
+const BACKUP_WARNING_PREFIX='BACKUP_';
 const RESOURCE_KINDS=new Set(['profile','plugin','provider']);
 const DEFAULT_BACKUP_LIMITS=Object.freeze({keep:10,maxBytes:2048*1024*1024});
 
@@ -44,6 +47,29 @@ function deviceErrorStatus(error){
 }
 
 const codeError=(code,message)=>{const error=Error(message??code);error.code=code;return error;};
+
+/** RISK-04: process-wide (per state directory) diagnostics rate limit; overflow is dropped silently. */
+const diagnosticWindows=new Map();
+export const DIAGNOSTICS_RATE_LIMIT=DIAGNOSTICS_LIMIT_PER_MINUTE;
+export function resetDiagnosticsRateLimit(){diagnosticWindows.clear();}
+function allowDiagnostic(stateDir,limit=DIAGNOSTICS_LIMIT_PER_MINUTE){
+  const key=typeof stateDir==='string'?stateDir:'';
+  const now=Date.now();
+  const recent=(diagnosticWindows.get(key)??[]).filter(time=>now-time<DIAGNOSTICS_WINDOW_MS);
+  if(recent.length>=limit){diagnosticWindows.set(key,recent);return false;}
+  recent.push(now);
+  diagnosticWindows.set(key,recent);
+  return true;
+}
+
+/** RISK-10: health responses are limited to reachable/latencyMs/error. */
+function publicHealth(result){
+  const health={reachable:result?.reachable===true};
+  if(Number.isFinite(result?.latencyMs)&&result.latencyMs>=0)health.latencyMs=Math.floor(result.latencyMs);
+  if(typeof result?.error==='string'&&/^[A-Z][A-Z0-9_]{0,63}$/.test(result.error))health.error=result.error;
+  if(!health.reachable&&!health.error)health.error='DEVICE_UNREACHABLE';
+  return health;
+}
 
 /** Package version for /health; read once at module load and never fatal. */
 const VERSION=(()=>{try{const pkg=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));return typeof pkg.version==='string'?pkg.version:null;}catch{return null;}})();
@@ -129,17 +155,32 @@ function publicChanges(list){
   }));
 }
 
+/** RISK-08: restore plan responses only expose contract top-level fields (no engine internals). */
+function publicRestorePlan(plan){
+  const view={mode:'restore'};
+  if(typeof plan?.id==='string'&&PLAN_ID.test(plan.id))view.id=plan.id;
+  const resource=parseResource(plan?.resource);
+  if(resource)view.resource=resource;
+  if(typeof plan?.revision==='string'&&/^[A-Za-z0-9._:-]{1,128}$/.test(plan.revision))view.revision=plan.revision;
+  if(typeof plan?.expiresAt==='string'&&plan.expiresAt.length<=40)view.expiresAt=plan.expiresAt;
+  if(typeof plan?.impact==='string'&&plan.impact.length>0&&plan.impact.length<=200)view.impact=plan.impact;
+  if(typeof plan?.warning==='string'&&plan.warning.length>0&&plan.warning.length<=500)view.warning=plan.warning;
+  return view;
+}
+
 /** Backup limits reported by GET /backups; MODEL_CONSOLE_BACKUP_MAX_MB is the byte cap source. */
 function backupLimits(env){
   return {keep:backupModule.backupKeep(env),maxBytes:backupModule.backupMaxBytes(env)};
 }
 
-export function createServer(engine,token,{staticRoot=publicRoot,health={},limits=DEFAULT_BACKUP_LIMITS,pruneBackups,createRemoteEngine,deviceStateDir,remoteSnapshotTtlMs=REMOTE_SNAPSHOT_TTL}={}){
+export function createServer(engine,token,{staticRoot=publicRoot,health={},limits=DEFAULT_BACKUP_LIMITS,pruneBackups,createRemoteEngine,createSshTunnel,pairAgentDevice,createAgentAdapter,createHttpGateway,deviceStateDir,remoteSnapshotTtlMs=REMOTE_SNAPSHOT_TTL,diagnosticsLimitPerMinute=DIAGNOSTICS_LIMIT_PER_MINUTE}={}){
   const startedAt=typeof health.startedAt==='string'?health.startedAt:new Date().toISOString();
   const stateDir=typeof health.stateDir==='string'?health.stateDir:null;
+  const diagnosticLimit=Number.isInteger(diagnosticsLimitPerMinute)&&diagnosticsLimitPerMinute>=0?diagnosticsLimitPerMinute:DIAGNOSTICS_LIMIT_PER_MINUTE;
   const pendingDiagnostics=new Set();
   const record=(level,event,fields)=>{
     if(!stateDir)return;
+    if(!allowDiagnostic(stateDir,diagnosticLimit))return;
     const promise=logDiagnostic(stateDir,{level,event,...fields});
     pendingDiagnostics.add(promise);
     promise.finally(()=>pendingDiagnostics.delete(promise));
@@ -160,11 +201,20 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
   const remoteTtl=Number.isFinite(remoteSnapshotTtlMs)&&remoteSnapshotTtlMs>=0?remoteSnapshotTtlMs:REMOTE_SNAPSHOT_TTL;
   const remoteSessions=new Map();
   const remoteSnapshots=new Map();
+  const tunnels=new Map();
   const localDevice=()=>({id:'local',name:'本机',kind:'local',readOnly:engine.writeEnabled!==true,hasSecret:false});
   /** Public device view: explicit field whitelist, so apiKey/auth internals never leave the process. */
   const publicDevice=device=>{
     const view={id:device.id,name:device.name,kind:device.kind??'http',readOnly:device.readOnly!==false,hasSecret:device.hasSecret===true};
     if(typeof device.baseUrl==='string')view.baseUrl=device.baseUrl;
+    // ssh public view keeps connection metadata only: keyPath/dataPath are local filesystem paths and stay out.
+    if(device.ssh&&typeof device.ssh==='object'){
+      const ssh={};
+      if(typeof device.ssh.host==='string')ssh.host=device.ssh.host;
+      if(typeof device.ssh.user==='string')ssh.user=device.ssh.user;
+      if(Number.isInteger(device.ssh.port))ssh.port=device.ssh.port;
+      if(Object.keys(ssh).length)view.ssh=ssh;
+    }
     if(typeof device.createdAt==='string')view.createdAt=device.createdAt;
     return view;
   };
@@ -174,12 +224,66 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
     const devices=await listDevices(registryDir);
     return devices.find(device=>device.id===id)??null;
   };
-  /** Default remote engine keeps the existing Engine semantics on top of the scoped OpenAPI adapter. */
+  /** Dynamic import keeps server.mjs loadable while the agent/ssh modules are still being built. */
+  const importOptional=async(path,code)=>{try{return await import(path);}catch{throw codeError(code,`缺少模块 ${path}`);}};
+  const defaultOpenSshTunnel=async device=>{
+    if(!device.ssh||typeof device.ssh!=='object')throw codeError('DEVICE_INVALID','ssh 设备缺少 ssh 配置');
+    const module=await importOptional('./ssh-tunnel.mjs','DEVICE_SSH_UNAVAILABLE');
+    const open=module.openSshTunnel??module.createSshTunnel;
+    if(typeof open!=='function')throw codeError('DEVICE_SSH_UNAVAILABLE','ssh-tunnel 模块未导出 openSshTunnel');
+    let opened;
+    try{opened=await open({ssh:device.ssh,baseUrl:device.baseUrl,dataPath:device.ssh.dataPath});}
+    catch(error){
+      if(typeof error?.code==='string'&&error.code.startsWith('DEVICE_'))throw error;
+      throw codeError('DEVICE_SSH_FAILED','SSH 隧道建立失败');
+    }
+    if(!opened||typeof opened.baseUrl!=='string'||typeof opened.close!=='function')throw codeError('DEVICE_SSH_FAILED','SSH 隧道返回格式无效');
+    return opened;
+  };
+  const openTunnel=typeof createSshTunnel==='function'?createSshTunnel:defaultOpenSshTunnel;
+  const defaultHttpGateway=(device,{baseUrl,apiKey})=>new HttpGatewayAdapter({baseUrl,apiKey});
+  const makeHttpGateway=typeof createHttpGateway==='function'?createHttpGateway:defaultHttpGateway;
+  const defaultPairAgent=async(device,pairingCode)=>{
+    const module=await importOptional('./agent-adapter.mjs','DEVICE_ADAPTER_UNAVAILABLE');
+    if(typeof module.pairAgent!=='function')throw codeError('DEVICE_ADAPTER_UNAVAILABLE','agent-adapter 模块未导出 pairAgent');
+    let result;
+    try{result=await module.pairAgent({baseUrl:device.baseUrl,pairingCode});}
+    catch(error){
+      if(typeof error?.code==='string'&&/^(?:DEVICE_|AGENT_)/.test(error.code))throw error;
+      throw codeError('DEVICE_AUTH_FAILED','Agent 配对失败');
+    }
+    const token=typeof result==='string'?result:result?.token;
+    if(typeof token!=='string'||!token)throw codeError('DEVICE_AUTH_FAILED','Agent 配对未返回有效 token');
+    return {token};
+  };
+  const pairDevice=typeof pairAgentDevice==='function'?pairAgentDevice:defaultPairAgent;
+  const defaultAgentAdapter=async(device,token)=>{
+    const module=await importOptional('./agent-adapter.mjs','DEVICE_ADAPTER_UNAVAILABLE');
+    if(typeof module.AgentAdapter!=='function')throw codeError('DEVICE_ADAPTER_UNAVAILABLE','agent-adapter 模块未导出 AgentAdapter');
+    const adapter=new module.AgentAdapter({baseUrl:device.baseUrl,token});
+    if(typeof adapter.snapshot!=='function')throw codeError('DEVICE_ENGINE_INVALID','AgentAdapter 缺少 snapshot()');
+    return adapter;
+  };
+  const makeAgentAdapter=typeof createAgentAdapter==='function'?createAgentAdapter:defaultAgentAdapter;
+  /** Default remote engine: agent uses AgentAdapter.snapshot; http/ssh use HttpGatewayAdapter (+ ssh tunnel). */
   const defaultRemoteEngine=async device=>{
     if(!registryDir)throw codeError('DEVICE_STORE_UNAVAILABLE','设备存储不可用');
-    const apiKey=await getSecret(registryDir,device.id);
-    if(typeof apiKey!=='string'||!apiKey)throw codeError('DEVICE_SECRET_REQUIRED','设备缺少 OpenAPI Key');
-    return new Engine({gateway:new HttpGatewayAdapter({baseUrl:device.baseUrl,apiKey}),writeEnabled:false});
+    const secret=await getSecret(registryDir,device.id);
+    if(typeof secret!=='string'||!secret)throw codeError('DEVICE_SECRET_REQUIRED','设备缺少凭据');
+    if(device.kind==='agent'){
+      const adapter=await makeAgentAdapter(device,secret);
+      return {gateway:adapter,snapshot:()=>adapter.snapshot(),close:()=>adapter.close?.()};
+    }
+    let baseUrl=device.baseUrl;
+    let tunnel=null;
+    if(device.kind==='ssh'){
+      tunnel=await openTunnel(device);
+      baseUrl=tunnel.baseUrl;
+      tunnels.set(device.id,tunnel);
+    }
+    const engine=new Engine({gateway:makeHttpGateway(device,{baseUrl,apiKey:secret}),writeEnabled:false});
+    if(tunnel)engine.close=()=>{const stored=tunnels.get(device.id);if(!stored)return;tunnels.delete(device.id);return stored.close?.();};
+    return engine;
   };
   const makeRemoteEngine=typeof createRemoteEngine==='function'?createRemoteEngine:defaultRemoteEngine;
   /** One cached read-only Engine per deviceId; failed creations are not cached. */
@@ -200,17 +304,41 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
     const remote=await remoteEngine(device);
     const snapshot=await remote.snapshot();
     if(!snapshot||typeof snapshot!=='object'||Array.isArray(snapshot))throw codeError('DEVICE_INVALID_RESPONSE','远程快照无效');
-    const value={...snapshot,device:{id:device.id,name:device.name,kind:device.kind??'http'}};
+    const value={...snapshot,writeEnabled:false,device:{id:device.id,name:device.name,kind:device.kind??'http'}};
     remoteSnapshots.set(device.id,{at:Date.now(),value});
     return value;
   };
-  const dropDeviceSession=id=>{remoteSessions.delete(id);remoteSnapshots.delete(id);};
+  /** RISK-02: dropping a session also closes its ssh tunnel / agent adapter, if any. */
+  const dropDeviceSession=async id=>{
+    const session=remoteSessions.get(id);
+    const tunnel=tunnels.get(id);
+    remoteSessions.delete(id);
+    remoteSnapshots.delete(id);
+    tunnels.delete(id);
+    if(session){try{const remote=await session;await remote?.close?.();}catch{}}
+    if(tunnel){try{await tunnel.close?.();}catch{}}
+  };
   const remoteHealth=async device=>{
     const remote=await remoteEngine(device);
     const gateway=remote.gateway;
     if(typeof gateway?.health!=='function')return {reachable:false,error:'DEVICE_HEALTH_UNAVAILABLE'};
+    const started=Date.now();
     const result=await gateway.health();
-    return result&&typeof result==='object'?result:{reachable:false,error:'DEVICE_HEALTH_UNAVAILABLE'};
+    if(!result||typeof result!=='object')return {reachable:false,error:'DEVICE_HEALTH_UNAVAILABLE'};
+    // HttpGatewayAdapter reports {reachable,latencyMs}; AgentAdapter.health reports {status:'ok',version}.
+    if(result.reachable===undefined&&result.status==='ok')return {reachable:true,latencyMs:Date.now()-started};
+    return result;
+  };
+
+  /** RISK-07: surface the most recent BACKUP_* diagnostics as backup warnings. */
+  const backupWarnings=async()=>{
+    if(!stateDir)return [];
+    const events=await readDiagnostics(stateDir,{limit:200});
+    return events
+      .filter(event=>typeof event.code==='string'&&event.code.startsWith(BACKUP_WARNING_PREFIX))
+      .slice(-5)
+      .reverse()
+      .map(event=>({code:event.code,time:event.time,message:typeof event.detail==='string'?event.detail:event.code}));
   };
 
   const server=http.createServer(async(req,res)=>{
@@ -246,8 +374,8 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
         if(!id)return send(400,{error:'INVALID_DEVICE_ID'});
         const device=await findDevice(id);
         if(!device)return send(404,{error:'DEVICE_NOT_FOUND'});
-        if(device.kind==='local')return send(200,{...publicDevice(device),reachable:true});
-        return send(200,{...publicDevice(device),...await remoteHealth(device)});
+        if(device.kind==='local')return send(200,{reachable:true});
+        return send(200,publicHealth(await remoteHealth(device)));
       }
       if(req.method==='GET'&&url.pathname==='/snapshot'){
         const deviceId=url.searchParams.get('device');
@@ -262,7 +390,7 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
         const stats=await backupStats();
         const keep=Number.isInteger(limits?.keep)&&limits.keep>0?limits.keep:DEFAULT_BACKUP_LIMITS.keep;
         const maxBytes=typeof limits?.maxBytes==='number'&&Number.isFinite(limits.maxBytes)?Math.max(0,Math.floor(limits.maxBytes)):DEFAULT_BACKUP_LIMITS.maxBytes;
-        return send(200,{backups:(Array.isArray(backups)?backups:[]).map(publicBackup).filter(Boolean),stats,limits:{keep,maxBytes}});
+        return send(200,{backups:(Array.isArray(backups)?backups:[]).map(publicBackup).filter(Boolean),stats,limits:{keep,maxBytes},warnings:await backupWarnings()});
       }
       const diffRoute=DIFF_ROUTE.exec(url.pathname);
       if(req.method==='GET'&&diffRoute){
@@ -281,8 +409,8 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
         if(id==='local')return send(400,{error:'LOCAL_DEVICE_READONLY'});
         if(!registryDir)throw codeError('DEVICE_STORE_UNAVAILABLE','设备存储不可用');
         await removeDevice(registryDir,id);
-        dropDeviceSession(id);
-        return send(200,{removed:id});
+        await dropDeviceSession(id);
+        return send(200,{removed:true});
       }
       if(req.method==='POST'){
         if(req.headers['content-type']!=='application/json')return send(415,{error:'JSON_REQUIRED'});
@@ -313,11 +441,32 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
           if(!resource)return send(400,{error:'INVALID_RESOURCE'});
           if(body.expectedRevision!==undefined&&(typeof body.expectedRevision!=='string'||body.expectedRevision.length>128))return send(400,{error:'INVALID_REVISION'});
           const plan=await engine.planRestore(backupId,resource,body.expectedRevision);
-          return send(200,{...plan,mode:'restore',backupId:backupIdOf(plan?.backupId)??backupId,changes:publicChanges(plan?.changes)});
+          return send(200,{...publicRestorePlan(plan),backupId:backupIdOf(plan?.backupId)??backupId,changes:publicChanges(plan?.changes)});
         }
         if(url.pathname==='/devices'){
           if(!registryDir)throw codeError('DEVICE_STORE_UNAVAILABLE','设备存储不可用');
-          const device=await addDevice(registryDir,{name:body.name,baseUrl:body.baseUrl,kind:'http',...(typeof body.readOnly==='boolean'?{readOnly:body.readOnly}:{})},body.apiKey);
+          const kind=typeof body.kind==='string'?body.kind:'http';
+          const input={
+            name:body.name,
+            baseUrl:body.baseUrl,
+            kind,
+            ...(typeof body.readOnly==='boolean'?{readOnly:body.readOnly}:{}),
+            ...(kind==='ssh'?{ssh:body.ssh}:{}),
+          };
+          // Validate and dedupe before pairing: a duplicate agent must not trigger another pair attempt.
+          const registry=await loadRegistry(registryDir);
+          const prepared=validateDevice(input,{existingIds:registry.devices.map(item=>item.id),existingDevices:registry.devices});
+          let credential;
+          if(kind==='agent'){
+            if(typeof body.pairingCode!=='string'||!body.pairingCode.trim())throw codeError('DEVICE_SECRET_REQUIRED','添加 agent 设备需要 pairingCode');
+            const paired=await pairDevice(prepared,body.pairingCode.trim());
+            credential=typeof paired==='string'?paired:paired?.token;
+            if(typeof credential!=='string'||!credential)throw codeError('DEVICE_AUTH_FAILED','Agent 配对未返回有效 token');
+          }else{
+            if(typeof body.apiKey!=='string'||!body.apiKey.trim())throw codeError('DEVICE_SECRET_REQUIRED','添加 HTTP/SSH 设备需要 OpenAPI Key（abk_...）');
+            credential=body.apiKey;
+          }
+          const device=await addDevice(registryDir,prepared,credential);
           return send(200,{device:publicDevice(device)});
         }
       }

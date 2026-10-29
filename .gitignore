@@ -5,6 +5,5 @@ node_modules/
 .tmp-*
 # 冒烟/巡检脚本只用 node .mjs；不要往项目里放 .ps1（AV 会按木马启发式拦截隐藏窗口+token 类脚本）
 *.ps1
-# 打包产物与 Inno Setup 编译输出（可重新生成，不提交）
+# 打包产物（可重新生成，不提交）
 dist/
-installer/Output/

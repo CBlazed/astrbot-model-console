@@ -140,3 +140,17 @@ test('设备选择器与远程设备管理控件都有可访问名', () => {
   assert.match(html, /id="remote-notice"[^>]*role="status"/, '远程只读提示缺少 role="status"');
   assert.match(html, /id="device-body"[^>]*>/, '设备表应有 tbody');
 });
+
+test('SSH/Agent 表单扩展、诊断导出与 RISK 展示都可访问', () => {
+  assert.match(html, /<select\b[^>]*id="device-kind"[^>]*aria-label="设备类型"/, '设备类型选择器缺少 aria-label');
+  assert.match(html, /id="device-ssh-host"[^>]*aria-label="SSH 主机"/, 'SSH 主机缺少 aria-label');
+  assert.match(html, /id="device-ssh-port"[^>]*aria-label="SSH 端口"/, 'SSH 端口缺少 aria-label');
+  assert.match(html, /id="device-ssh-user"[^>]*aria-label="SSH 用户"/, 'SSH 用户缺少 aria-label');
+  assert.match(html, /id="device-ssh-key"[^>]*aria-label="SSH 私钥路径"/, 'SSH 私钥路径缺少 aria-label');
+  assert.match(html, /id="device-ssh-data"[^>]*aria-label="远端 AstrBot data 目录"/, '远端数据目录缺少 aria-label');
+  assert.match(html, /id="device-pairing"[^>]*type="password"[^>]*aria-label="Agent 配对码"/, '配对码必须是 password 且有 aria-label');
+  assert.match(html, /id="device-pairing"[^>]*autocomplete="new-password"/, '配对码输入应阻止浏览器回显');
+  assert.match(html, /id="diagnostics-export"[^>]*class="button"/, '缺少导出诊断按钮');
+  assert.match(html, /id="backup-warnings"[^>]*aria-label="备份警告"/, '备份警告列表缺少 aria-label');
+  assert.match(html, /id="config-version"[^>]*>配置版本/, '缺少“配置版本”展示');
+});

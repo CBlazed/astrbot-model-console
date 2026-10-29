@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createServer,start,trustedRequest} from '../src/server.mjs';
+import {createServer,start,trustedRequest,DIAGNOSTICS_RATE_LIMIT} from '../src/server.mjs';
 import {Engine,revision} from '../src/engine.mjs';
+import {logDiagnostic} from '../src/diagnostics.mjs';
 async function fixture(run,{serverOptions={}}={}){const dir=await mkdtemp(join(tmpdir(),'model-console-http-'));await writeFile(join(dir,'index.html'),'<h1>Model Console</h1>');await writeFile(join(dir,'app.mjs'),'export const ui=true;');let applies=0;const engine={gateway:{efforts:async id=>id==='known'?['low','max']:null},snapshot:async()=>({writeEnabled:false,models:[]}),plan:async(resource,changes,_internal,expectedRevision)=>({resource,changes,expectedRevision}),apply:async()=>{applies++;return {status:'saved-and-readback-verified'};}};const stateDir=join(dir,'state');const server=createServer(engine,'secret',{staticRoot:dir,health:{stateDir,dataPath:join(dir,'data'),readOnly:false},...serverOptions});await new Promise(r=>server.listen(0,'127.0.0.1',r));try{await run({base:`http://127.0.0.1:${server.address().port}`,engine,server,stateDir,get applies(){return applies;}});}finally{await new Promise(r=>server.close(r));await server.flushDiagnostics();await rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:50});}}
 const auth={Authorization:'Bearer secret'};
 test('static UI is credential-free, CSP protected and same-host only',()=>fixture(async({base})=>{const page=await fetch(base+'/');assert.equal(page.status,200);assert.match(await page.text(),/Model Console/);assert.match(page.headers.get('content-security-policy'),/script-src 'self'/);assert.equal(page.headers.get('referrer-policy'),'no-referrer');assert.equal((await fetch(base+'/',{headers:{Origin:'https://evil.test'}})).status,403);assert.equal(trustedRequest({headers:{host:'evil.test'}},Number(new URL(base).port)),false);assert.equal((await fetch(base+'/app.mjs')).status,200);}));
@@ -128,6 +129,7 @@ test('GET /backups requires the token, normalizes ids and drops engine extras',(
   ]);
   assert.deepEqual(body.stats,{count:2,bytes:300});
   assert.deepEqual(body.limits,{keep:3,maxBytes:4096});
+  assert.deepEqual(body.warnings,[]);
   assert.ok(calls.some(call=>call[0]==='listBackups'));
   assert.ok(calls.some(call=>call[0]==='backupStats'));
   assert.doesNotMatch(JSON.stringify(body),/items|[A-Za-z]:\\\\|model-console-api-/);
@@ -306,4 +308,61 @@ test('provider resource ids may contain "/" while traversal and path-like ids st
   // 单个 provider id 长度上限 200（profile/plugin 仍是 128）。
   assert.equal((await fetch(diffUrl('a'.repeat(200)),{headers:auth})).status,200);
   assert.equal((await fetch(diffUrl('a'.repeat(201)),{headers:auth})).status,400);
+}));
+
+test('GET /backups surfaces the five most recent BACKUP_* diagnostics as warnings',()=>apiFixture(async({base,stateDir})=>{
+  for(let index=0;index<6;index++){
+    await logDiagnostic(stateDir,{level:'warn',event:'backup-warning',code:`BACKUP_W${index}`,detail:`warning ${index}`});
+  }
+  const body=await (await fetch(base+'/backups',{headers:auth})).json();
+  assert.equal(body.warnings.length,5);
+  assert.deepEqual(body.warnings.map(warning=>warning.code),['BACKUP_W5','BACKUP_W4','BACKUP_W3','BACKUP_W2','BACKUP_W1']);
+  for(const warning of body.warnings){
+    assert.match(warning.time,/^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(typeof warning.message,'string');
+    assert.match(warning.code,/^BACKUP_[A-Z0-9_]+$/);
+  }
+  assert.equal(body.warnings[0].message,'warning 5');
+  assert.doesNotMatch(JSON.stringify(body.warnings),/[A-Za-z]:\\/);
+}));
+
+test('diagnostics are rate limited per state directory (RISK-04) without breaking responses',()=>fixture(async({base,stateDir,server})=>{
+  assert.equal(DIAGNOSTICS_RATE_LIMIT,120);
+  for(let index=0;index<5;index++){
+    assert.equal((await fetch(base+'/devices/nope/health',{headers:auth})).status,404);
+  }
+  await server.flushDiagnostics();
+  const text=await readFile(join(stateDir,'diagnostics.jsonl'),'utf8');
+  const events=text.trim().split('\n').map(line=>JSON.parse(line));
+  assert.equal(events.length,3,'超出每分钟 3 条上限的诊断必须丢弃');
+  assert.ok(events.every(event=>event.status===404&&event.path==='/devices/nope/health'));
+},{serverOptions:{diagnosticsLimitPerMinute:3}}));
+
+test('POST /restore-plans returns only whitelisted top-level fields (RISK-08)',()=>apiFixture(async({base,engine,calls})=>{
+  const internalPlan={
+    id:planId,
+    resource:{kind:'profile',id:'default'},
+    revision:'rev-1',
+    changes:[{path:'agent_runner.config.model.provider_id',before:'a',value:'b',capability:'llm',secret:'drop-me'}],
+    expiresAt:'2026-10-29T12:10:00.000Z',
+    impact:'this profile',
+    warning:'恢复会覆盖该资源的完整对象',
+    before:{secret:'KEEP-BEFORE',apiKey:'abk_do_not_leak'},
+    after:{secret:'KEEP-AFTER'},
+    extra:'drop-me',
+    backupId:`C:\Users\someone\backups\${backupUuid}`,
+    path:'C:\secret\file',
+  };
+  engine.planRestore=async(backupId,resource,expectedRevision)=>{calls.push(['planRestore',backupId,resource,expectedRevision]);return internalPlan;};
+  const headers={...auth,'Content-Type':'application/json'};
+  const response=await fetch(base+'/restore-plans',{method:'POST',headers,body:JSON.stringify({backupId:backupUuid,resource:{kind:'profile',id:'default'},expectedRevision:'rev-1'})});
+  assert.equal(response.status,200);
+  const body=await response.json();
+  assert.deepEqual(Object.keys(body).sort(),['backupId','changes','expiresAt','id','impact','mode','resource','revision','warning']);
+  assert.equal(body.mode,'restore');
+  assert.equal(body.backupId,backupUuid);
+  assert.equal(body.revision,'rev-1');
+  assert.deepEqual(body.changes,[{path:'agent_runner.config.model.provider_id',before:'a',value:'b',capability:'llm'}]);
+  const serialized=JSON.stringify(body);
+  assert.doesNotMatch(serialized,/KEEP-BEFORE|KEEP-AFTER|drop-me|C:\\|abk_do_not_leak|secret/i);
 }));

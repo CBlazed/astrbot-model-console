@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {stage,groups,currentRevision,candidates,indexCapability,counts,parseTokenHash,loadToken,saveToken,clearToken,buildConflictRows,bindingStatus,routingNoticeText,isIssue,loadDevice,saveDevice,snapshotPath,isRemoteSnapshot,deviceOptions,healthBadge,deviceErrorText} from '../public/ui-state.mjs';
+import {stage,groups,currentRevision,candidates,indexCapability,counts,parseTokenHash,loadToken,saveToken,clearToken,buildConflictRows,bindingStatus,routingNoticeText,isIssue,loadDevice,saveDevice,snapshotPath,isRemoteSnapshot,deviceOptions,healthBadge,deviceErrorText,deviceKind,deviceKindLabel,validateDeviceInput,backupWarnings,configVersionText} from '../public/ui-state.mjs';
 test('UI drafts preserve original values and remove changes reverted to original',()=>{const resource={kind:'plugin',id:'one'};let drafts=stage(new Map(),resource,'model','luna','flash','r1');assert.equal([...drafts.values()][0].baseValue,'flash');drafts=stage(drafts,resource,'model','flash','flash','r1');assert.equal(drafts.size,0);});
 test('UI groups writes by resource while preserving unrelated resources',()=>{let drafts=new Map();drafts=stage(drafts,{kind:'plugin',id:'a'},'first','luna','','r');drafts=stage(drafts,{kind:'plugin',id:'a'},'second','luna','','r');drafts=stage(drafts,{kind:'profile',id:'b'},'main','flash','','s');assert.equal(groups(drafts).length,2);assert.equal(groups(drafts)[0].changes.length,2);});
 test('UI model candidates only include enabled models with declared capability',()=>{assert.deepEqual(candidates([{id:'a',enabled:true,capabilities:['llm']},{id:'b',enabled:false,capabilities:['vision']},{id:'c',enabled:true,capabilities:['vision']}],'vision').map(x=>x.id),['c']);assert.equal(indexCapability('embedding'),true);assert.equal(indexCapability('vision'),false);});
@@ -146,6 +146,8 @@ test('UI device selection stores only an id and local never sends a query',()=>{
 });
 test('UI remote snapshot is read-only while missing device means legacy local',()=>{
  assert.equal(isRemoteSnapshot({device:{id:'d',name:'host',kind:'http'}}),true);
+ assert.equal(isRemoteSnapshot({device:{id:'d',name:'host',kind:'ssh'}}),true);
+ assert.equal(isRemoteSnapshot({device:{id:'d',name:'host',kind:'agent'}}),true);
  assert.equal(isRemoteSnapshot({device:{id:'local',kind:'local'}}),false);
  assert.equal(isRemoteSnapshot({}),false);
  assert.equal(isRemoteSnapshot(null),false);
@@ -192,4 +194,74 @@ test('UI 页面覆盖设备选择器与远程设备管理契约',()=>{
  assert.ok(ui.includes('DEVICE_AUTH_FAILED')&&ui.includes('DEVICE_FORBIDDEN')&&ui.includes('DEVICE_UNREACHABLE'),'设备错误码需有可读文案');
  assert.ok(!/localStorage/.test(app));
  assert.ok(!/\bconsole\.(log|info|debug|warn|error)\s*\(/.test(app),'不得打印设备凭据');
+});
+
+test('UI device kind normalizes legacy records and labels every kind',()=>{
+ assert.equal(deviceKind({id:'local',kind:'local'}),'local');
+ assert.equal(deviceKind({id:'x',kind:'http'}),'http');
+ assert.equal(deviceKind({id:'x',kind:'ssh'}),'ssh');
+ assert.equal(deviceKind({id:'x',kind:'agent'}),'agent');
+ assert.equal(deviceKind({id:'legacy'}),'http');
+ assert.equal(deviceKind({id:'legacy',name:'旧设备'}),'http');
+ assert.equal(deviceKind(undefined),'http');
+ assert.equal(deviceKind({id:'local'}),'local');
+ assert.equal(deviceKindLabel('local'),'本机');
+ assert.equal(deviceKindLabel('http'),'HTTP');
+ assert.equal(deviceKindLabel('ssh'),'SSH');
+ assert.equal(deviceKindLabel('agent'),'Agent');
+ assert.equal(deviceKindLabel(undefined),'HTTP');
+});
+test('UI device form validates http/ssh/agent payloads and never echoes secrets',()=>{
+ const http=validateDeviceInput({kind:'http',name:' 书房主机 ',baseUrl:'http://192.168.1.20:6185',apiKey:' abk_key '});
+ assert.equal(http.ok,true);
+ assert.deepEqual(http.payload,{name:'书房主机',kind:'http',baseUrl:'http://192.168.1.20:6185',apiKey:'abk_key'});
+ assert.deepEqual(validateDeviceInput({kind:'http',name:'',baseUrl:''}).errors,['DEVICE_NAME_REQUIRED','DEVICE_BASEURL_REQUIRED','DEVICE_SECRET_REQUIRED']);
+ assert.deepEqual(validateDeviceInput({name:'旧表单',baseUrl:'http://a',apiKey:'abk'}).payload.kind,'http');
+ const ssh=validateDeviceInput({kind:'ssh',name:'云主机',baseUrl:'http://127.0.0.1:6185',apiKey:'abk_1',host:'1.2.3.4',port:'2222',user:'Administrator',keyPath:' C:\\keys\\id ',dataPath:'C:\\AstrBot\\data'});
+ assert.equal(ssh.ok,true);
+ assert.deepEqual(ssh.payload.ssh,{host:'1.2.3.4',user:'Administrator',port:2222,keyPath:'C:\\keys\\id',dataPath:'C:\\AstrBot\\data'});
+ assert.equal(ssh.payload.apiKey,'abk_1');
+ assert.equal(validateDeviceInput({kind:'ssh',name:'x',baseUrl:'http://a',apiKey:'abk',port:'abc',keyPath:'',dataPath:''}).payload.ssh.port,undefined);
+ assert.equal(validateDeviceInput({kind:'ssh',name:'x',baseUrl:'http://a',apiKey:'abk',port:'70000'}).payload.ssh.port,undefined);
+ assert.deepEqual(validateDeviceInput({kind:'ssh',name:'x',baseUrl:'http://a',apiKey:''}).errors,['DEVICE_SECRET_REQUIRED','DEVICE_SSH_HOST_REQUIRED','DEVICE_SSH_USER_REQUIRED']);
+ const agent=validateDeviceInput({kind:'agent',name:'Agent 主机',baseUrl:'http://127.0.0.1:7100',pairingCode:' 12345678 '});
+ assert.equal(agent.ok,true);
+ assert.deepEqual(agent.payload,{name:'Agent 主机',kind:'agent',baseUrl:'http://127.0.0.1:7100',pairingCode:'12345678'});
+ assert.equal(agent.payload.apiKey,undefined);
+ assert.deepEqual(validateDeviceInput({kind:'agent',name:'x',baseUrl:'http://a'}).errors,['DEVICE_PAIRING_REQUIRED']);
+});
+test('UI SSH/Agent/backup and version RISK texts are readable and bounded',()=>{
+ assert.match(deviceErrorText('DEVICE_SSH_UNAVAILABLE'),/ssh/i);
+ assert.match(deviceErrorText('DEVICE_SSH_FAILED'),/SSH|隧道/);
+ assert.match(deviceErrorText('DEVICE_PORT_UNKNOWN'),/端口/);
+ assert.match(deviceErrorText('AGENT_UNREACHABLE'),/Agent/);
+ assert.match(deviceErrorText('AGENT_PAIR_FAILED'),/配对码/);
+ assert.match(deviceErrorText('AGENT_AUTH_FAILED'),/令牌/);
+ assert.equal(deviceErrorText('DEVICE_UNKNOWN_X'),'');
+ const warnings=backupWarnings([{code:'BACKUP_PRUNE_FAILED',time:'2026-10-29T00:00:00Z',message:'清理失败'},{code:'BACKUP_OVERSIZE'},{},null,...Array.from({length:5},(_,i)=>({code:`BACKUP_${i}`,message:`m${i}`}))]);
+ assert.equal(warnings.length,5);
+ assert.deepEqual(warnings[0],{code:'BACKUP_PRUNE_FAILED',time:'2026-10-29T00:00:00Z',message:'清理失败'});
+ assert.deepEqual(warnings[1],{code:'BACKUP_OVERSIZE',time:'',message:''});
+ assert.deepEqual(backupWarnings(undefined),[]);
+ assert.deepEqual(backupWarnings([{code:'A',message:'x'}],2).length,1);
+ assert.equal(configVersionText({configVersion:'v4.29.3'}),'配置版本 v4.29.3');
+ assert.equal(configVersionText({}),'配置版本 未知');
+ assert.equal(configVersionText({configVersion:0}),'配置版本 0');
+});
+test('UI 页面覆盖 Epic-2 设备表单与 RISK 契约',()=>{
+ const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
+ const app=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');
+ for(const id of ['device-kind','device-key-field','device-ssh-fields','device-ssh-host','device-ssh-port','device-ssh-user','device-ssh-key','device-ssh-data','device-pairing-field','device-pairing','diagnostics-export','backup-warnings','config-version']){
+  assert.ok(new RegExp(`id="${id}"`).test(html),`index.html 缺少 #${id}`);
+ }
+ for(const fragment of ["api('/diagnostics/export')",'validateDeviceInput','backupWarnings','deviceKind(','配置版本','控制台版本','device-ssh-host','device-ssh-user','device-pairing']){
+  assert.ok(app.includes(fragment),`app.mjs 缺少 ${fragment}`);
+ }
+ assert.ok(!app.includes('AstrBot 版本'),'版本标签只能是“控制台版本”');
+ assert.match(app,/\$\('device-pairing'\)\.value=''/,'配对码输入在提交后必须被清空');
+ assert.match(app,/\$\('device-key'\)\.value=''/,'apiKey 输入在提交后必须被清空');
+ assert.ok(!/localStorage/.test(app));
+ assert.ok(!/\bconsole\.(log|info|debug|warn|error)\s*\(/.test(app));
+ assert.ok(!/<script\b(?![^>]*\bsrc\s*=)/i.test(html),'不得内联脚本');
+ assert.ok(!/\bon[a-z]+\s*=\s*"/i.test(html),'不得内联事件处理器');
 });

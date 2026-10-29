@@ -43,3 +43,20 @@ test('backup methods fail closed when no backup store is injected',async()=>{con
 test('restore errors from the backup store propagate unchanged',async()=>{const f=fixture({backups:{list:async()=>[],read:async()=>{const error=Error('RESTORE_BACKUP_NOT_FOUND');error.code='RESTORE_BACKUP_NOT_FOUND';throw error;}}});await assert.rejects(()=>f.engine.planRestore(BACKUP_ID,resource),/RESTORE_BACKUP_NOT_FOUND/);await assert.rejects(()=>f.engine.backupDiff(BACKUP_ID,resource),/RESTORE_BACKUP_NOT_FOUND/);});
 test('snapshot exposes the routing summary and falls back to all zeroes',async()=>{const f=fixture();f.gateway.routingSummary=async()=>({total:3,platformLevel:2,granular:1});assert.deepEqual((await f.engine.snapshot()).routing,{total:3,platformLevel:2,granular:1});const absent=fixture();assert.deepEqual((await absent.engine.snapshot()).routing,{total:0,platformLevel:0,granular:0});const failing=fixture();failing.gateway.routingSummary=async()=>{throw Error('NETWORK_LOST');};assert.deepEqual((await failing.engine.snapshot()).routing,{total:0,platformLevel:0,granular:0});const partial=fixture();partial.gateway.routingSummary=async()=>({total:'bad',granular:1});assert.deepEqual((await partial.engine.snapshot()).routing,{total:0,platformLevel:0,granular:1});});
 test('restore plan rejects embedding/rerank differences before apply',async()=>{const living={kind:'plugin',id:'astrbot_plugin_livingmemory'};const f=fixture({backups:backupStore({provider_settings:{embedding_provider_id:'embed'}})});f.config={provider_settings:{embedding_provider_id:''}};const diff=await f.engine.backupDiff(BACKUP_ID,living);assert.equal(diff.changes[0].capability,'embedding');await assert.rejects(()=>f.engine.planRestore(BACKUP_ID,living),/INDEX_MIGRATION_REQUIRES_SEPARATE_WORKFLOW/);assert.equal(f.engine.plans.size,0);assert.equal(f.writes,0);});
+
+test('snapshot exposes configVersion from the default profile and null when absent',async()=>{
+  const absent=fixture();
+  assert.equal((await absent.engine.snapshot()).configVersion,null);
+  const numeric=fixture();
+  const readNumeric=numeric.gateway.read;
+  numeric.gateway.read=async resource=>resource.kind==='profile'?{...await readNumeric(resource),config_version:3}:readNumeric(resource);
+  assert.equal((await numeric.engine.snapshot()).configVersion,3);
+  const textual=fixture();
+  const readTextual=textual.gateway.read;
+  textual.gateway.read=async resource=>resource.kind==='profile'?{...await readTextual(resource),config_version:'4.2'}:readTextual(resource);
+  assert.equal((await textual.engine.snapshot()).configVersion,'4.2');
+  const malformed=fixture();
+  const readMalformed=malformed.gateway.read;
+  malformed.gateway.read=async resource=>resource.kind==='profile'?{...await readMalformed(resource),config_version:{bad:true}}:readMalformed(resource);
+  assert.equal((await malformed.engine.snapshot()).configVersion,null);
+});

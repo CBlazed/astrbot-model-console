@@ -6,8 +6,11 @@
  *
  * Copies a strict whitelist (src/, public/, package.json, start-console*.cmd, README, necessary
  * docs) into <out>/AstrBotModelConsole, bundles node.exe + the Node license, writes start.cmd /
- * start-edit.cmd and SHA256SUMS.txt, regenerates installer/model-console.iss, and optionally
- * builds the portable zip with PowerShell Compress-Archive (visible window, never hidden).
+ * start-edit.cmd and SHA256SUMS.txt, and optionally builds the portable zip with PowerShell
+ * Compress-Archive (visible window, never hidden).
+ *
+ * Portable-only by design: no installer, no auto-update. Users extract the zip and double-click
+ * start.cmd; upgrading means replacing the folder.
  *
  * Never copy state/, .git/, .tmp*, *.log or tests: user data and secrets stay out of the package.
  */
@@ -15,18 +18,17 @@ import {createHash} from 'node:crypto';
 import {createReadStream,existsSync} from 'node:fs';
 import {copyFile,mkdir,readdir,readFile,rm,stat,writeFile} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
-import {basename,dirname,isAbsolute,join,relative,resolve,sep} from 'node:path';
+import {basename,dirname,join,relative,resolve,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const PRODUCT='AstrBotModelConsole';
-const APP_ID='{{6D3C8B4E-2F5A-4E7B-9C1D-8A7E6F5D4C3B}';
 const SCRIPT_DIR=dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT=resolve(SCRIPT_DIR,'..');
 const REQUIRED_DIRS=['src','public'];
 const REQUIRED_FILES=['package.json','README.md','start-console.cmd','start-console-edit.cmd'];
 const REQUIRED_DOCS=['docs/HANDOVER.zh-CN.md'];
 const OPTIONAL_DOCS=['docs/BUILD.zh-CN.md','docs/DESIGN-multi-device-2026-10-29.zh-CN.md'];
-const SKIP_NAMES=new Set(['.git','node_modules','state','dist','test','installer','scripts']);
+const SKIP_NAMES=new Set(['.git','node_modules','state','dist','test','scripts']);
 
 const isFile=async path=>{try{return (await stat(path)).isFile();}catch{return false;}};
 const isDirectory=async path=>{try{return (await stat(path)).isDirectory();}catch{return false;}};
@@ -67,12 +69,6 @@ function sha256File(path){
     stream.on('data',chunk=>hash.update(chunk));
     stream.on('end',()=>resolveHash(hash.digest('hex')));
   });
-}
-
-async function writeIfChanged(path,content){
-  try{if(await readFile(path,'utf8')===content)return false;}catch{}
-  await writeFile(path,content,'utf8');
-  return true;
 }
 
 function launcher(extraArgs,description){
@@ -122,7 +118,8 @@ function printHelp(){
     '',
     '产物：<out>/AstrBotModelConsole/（含 node.exe、src/、public/、start.cmd、SHA256SUMS.txt）',
     '      <out>/AstrBotModelConsole-<version>-win-<arch>.zip（仅 --zip）',
-    '      <repo>/installer/model-console.iss（自动重新生成）',
+    '',
+    '便携包：解压后双击 start.cmd 即可运行；没有安装器、没有自动更新，升级=替换整个目录。',
     '',
     '不会打包：state/、.git/、.tmp*、*.log、test/、任何密钥或用户数据。',
   ].join('\n'));
@@ -130,7 +127,7 @@ function printHelp(){
 
 function guardTarget(target,out){
   if(resolve(out)===target||basename(target)!==PRODUCT)throw Error(`拒绝清理异常输出目录：${target}`);
-  for(const sensitive of ['src','public','docs','test','scripts','installer'])if(target===resolve(REPO_ROOT,sensitive))throw Error(`拒绝清理源码目录：${target}`);
+  for(const sensitive of ['src','public','docs','test','scripts'])if(target===resolve(REPO_ROOT,sensitive))throw Error(`拒绝清理源码目录：${target}`);
   if(target===REPO_ROOT)throw Error('拒绝清理仓库根目录。');
 }
 
@@ -143,66 +140,6 @@ function resolvePowershell(){
 /** PowerShell single-quoted literal: internal single quotes are doubled; spaces stay inside the quotes. */
 function psLiteral(value){
   return `'${String(value).replaceAll("'","''")}'`;
-}
-
-function installerSourceDir(out){
-  const target=join(out,PRODUCT);
-  const relativePath=relative(join(REPO_ROOT,'installer'),target);
-  return isAbsolute(relativePath)?target:relativePath;
-}
-
-function installerScript({version,out,nodeVersion}){
-  const sourceDir=installerSourceDir(out);
-  return `\uFEFF; AstrBot Model Console - Inno Setup 脚本（per-user 安装，免管理员）
-; 本文件由 scripts/build-package.mjs 自动生成；要改安装器请改脚本里的模板，不要直接改本文件。
-; 生成安装器前先构建便携包：node scripts/build-package.mjs
-; 编译（需安装 Inno Setup 6）：ISCC.exe installer\\model-console.iss
-; 产物：installer\\Output\\AstrBotModelConsole-${version}-win-${process.arch}-setup.exe
-
-#define AppName "AstrBot Model Console"
-#define AppVersion "${version}"
-#define NodeVersion "${nodeVersion}"
-#define SourceDir "${sourceDir}"
-
-[Setup]
-AppId=${APP_ID}
-AppName={#AppName}
-AppVersion={#AppVersion}
-AppPublisher=AstrBot Model Console
-DefaultDirName={localappdata}\\AstrBotModelConsole\\app
-DefaultGroupName={#AppName}
-DisableProgramGroupPage=yes
-PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
-OutputDir=Output
-OutputBaseFilename=AstrBotModelConsole-{#AppVersion}-win-${process.arch}-setup
-Compression=lzma2/max
-SolidCompression=yes
-WizardStyle=modern
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
-UninstallDisplayIcon={app}\\node.exe
-CloseApplications=no
-
-[Tasks]
-Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: unchecked
-
-[Files]
-; 只安装便携包内容；state\\ 用户数据不在安装范围内。
-Source: "{#SourceDir}\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-
-[Icons]
-Name: "{group}\\{#AppName}"; Filename: "{app}\\start.cmd"; WorkingDir: "{app}"
-Name: "{group}\\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\\{#AppName}"; Filename: "{app}\\start.cmd"; WorkingDir: "{app}"; Tasks: desktopicon
-
-[Run]
-Filename: "{app}\\start.cmd"; Description: "启动 {#AppName}"; Flags: nowait postinstall skipifsilent
-
-; 卸载只删除安装目录 {app}（%LOCALAPPDATA%\\AstrBotModelConsole\\app）与快捷方式。
-; 用户数据目录 %LOCALAPPDATA%\\AstrBotModelConsole\\state（备份、审计、锁）由程序自行管理，
-; 这里刻意不写 [UninstallDelete]，卸载后保留 state。
-`;
 }
 
 async function main(){
@@ -254,10 +191,6 @@ async function main(){
   await writeFile(join(target,'start.cmd'),launcher(['--open'],'AstrBot Model Console (read-only). Close this window to stop it.'),'utf8');
   await writeFile(join(target,'start-edit.cmd'),launcher(['--enable-writes','--open'],'AstrBot Model Console (editing). Changes still require preview and Apply in the browser.'),'utf8');
 
-  await mkdir(join(REPO_ROOT,'installer'),{recursive:true});
-  const installerPath=join(REPO_ROOT,'installer','model-console.iss');
-  const installerChanged=await writeIfChanged(installerPath,installerScript({version,out:options.out,nodeVersion:process.version}));
-
   const files=(await listFiles(target)).filter(file=>basename(file)!=='SHA256SUMS.txt').sort();
   const lines=[];let totalBytes=0;
   for(const file of files){
@@ -271,8 +204,8 @@ async function main(){
   console.log(`  输出：${target}`);
   console.log(`  文件：${files.length} 个，合计 ${(totalBytes/1048576).toFixed(1)} MB`);
   console.log(`  校验：${join(target,'SHA256SUMS.txt')}（${lines.length} 行）`);
-  console.log(`  启动：${join(target,'start.cmd')}（双击；只读模式）`);
-  console.log(`  安装器脚本：${installerPath}${installerChanged?'':'（未变化）'}`);
+  console.log('  运行方式：解压后双击 start.cmd（只读模式，无需安装）；需要编辑请用 start-edit.cmd');
+  console.log('  说明：便携包，无安装器、无自动更新；升级=替换整个目录，用户数据留在 state/');
 
   if(options.zip){
     const zipPath=join(options.out,`${PRODUCT}-${version}-win-${process.arch}.zip`);

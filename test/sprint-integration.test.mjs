@@ -123,6 +123,7 @@ test('P1-04 GET /backups：UUID basename、stats、limits，绝对路径与 engi
       ],
       stats:{count:2,bytes:300},
       limits:{keep:4,maxBytes:12345},
+      warnings:[],
     });
     assert.doesNotMatch(JSON.stringify(body),/alice|internal|not-a-uuid|[A-Za-z]:\\\\/);
     assert.equal(calls.length,0,'GET /backups 应为只读，engine 不记录写调用');
@@ -212,6 +213,8 @@ test('P1-04 POST /restore-plans：契约形状、参数校验、409 白名单',a
     expiresAt:'2026-10-29T12:00:00.000Z',
     warning:'恢复会覆盖该资源完整对象',
     backupId:`C:\\Users\\alice\\backups\\${BACKUP_1}`,
+    internal:'drop-me',
+    enginePath:'C:\\Users\\alice\\secret',
   };
   const {engine,calls}=fakeEngine({planRestore:async(backupId,resource,expectedRevision)=>{calls.push(['planRestore',backupId,resource,expectedRevision]);return restorePlan;}});
   await apiFixture({engine},async({base})=>{
@@ -225,7 +228,8 @@ test('P1-04 POST /restore-plans：契约形状、参数校验、409 白名单',a
     assert.equal(body.id,PLAN_ID);
     assert.match(body.warning,/覆盖/);
     assert.deepEqual(body.changes,[{path:'agent_runner.config.model.provider_id',before:'a',value:'b',capability:'llm'}]);
-    assert.doesNotMatch(JSON.stringify(body),/C:\\\\|alice|internal|drop-me/);
+    assert.doesNotMatch(JSON.stringify(body),/C:\\\\|alice|internal|drop-me|enginePath/);
+    assert.ok(Object.keys(body).every(key=>['mode','id','resource','revision','expiresAt','impact','warning','backupId','changes'].includes(key)),JSON.stringify(Object.keys(body)));
     assert.deepEqual(calls.find(call=>call[0]==='planRestore'),['planRestore',BACKUP_1,{kind:'profile',id:'default'},'rev-1']);
     for(const badBody of [
       {resource:{kind:'profile',id:'default'}},
@@ -648,7 +652,7 @@ test('P1-04 恢复边界：embedding/rerank 差异在计划阶段即被索引迁
   assert.equal(writes.length,0,'索引类恢复必须在写入前被阻断');
 });
 
-test('Epic-1 /devices：CRUD、secret 分离、契约形状与既有偏差（DELETE 返回 id）',async()=>{
+test('Epic-1 /devices：CRUD、secret 分离、重复 409、DELETE true、health 精简',async()=>{
   const {factory}=fakeRemoteFactory();
   await apiFixture({engine:fakeEngine().engine,createRemoteEngine:factory,remoteSnapshotTtlMs:60000},async({base,stateDir})=>{
     assert.equal((await fetch(base+'/devices')).status,403);
@@ -677,24 +681,25 @@ test('Epic-1 /devices：CRUD、secret 分离、契约形状与既有偏差（DEL
     assert.doesNotMatch(devicesFile,/abk_SECRET/);
     assert.match(secretsFile,/abk_SECRET_A/);
     assert.match(secretsFile,/abk_SECRET_B/);
-    // readOnly:false 透传；重复 name/baseUrl 不会触发契约里的 DEVICE_EXISTS（POST 不接受 id，409 实际不可达）。
+    // readOnly:false 透传；同 kind + 规范化 baseUrl 重复 → 409 DEVICE_EXISTS（RISK-03）。
     const writable=await (await fetch(base+'/devices',{method:'POST',headers:JSON_HEADERS,body:JSON.stringify({name:'可写设备',baseUrl:'http://192.168.1.22:6185',apiKey:'abk_SECRET_C',readOnly:false})})).json();
     assert.equal(writable.device.readOnly,false);
-    const duplicate=await fetch(base+'/devices',{method:'POST',headers:JSON_HEADERS,body:JSON.stringify({name:'书房主机',baseUrl:'http://192.168.1.20:6185',apiKey:'abk_SECRET_D'})});
-    assert.equal(duplicate.status,200,'契约的 DEVICE_EXISTS(409) 在 POST /devices 上不可达：id 由服务端生成');
-    assert.notEqual((await duplicate.json()).device.id,a.id);
-    // 健康检查：local 恒可达；远程走 adapter health。
+    const duplicate=await fetch(base+'/devices',{method:'POST',headers:JSON_HEADERS,body:JSON.stringify({name:'书房主机',baseUrl:'http://192.168.1.20:6185/',apiKey:'abk_SECRET_D'})});
+    assert.equal(duplicate.status,409);
+    assert.deepEqual(await duplicate.json(),{error:'DEVICE_EXISTS'});
+    const afterDuplicate=await (await fetch(base+'/devices',{headers:AUTH})).json();
+    assert.equal(afterDuplicate.devices.length,4,'重复设备不得改变注册表');
+    // 健康检查只回 {reachable,latencyMs?,error?}（RISK-10），不再附带设备字段。
     const localHealth=await (await fetch(base+'/devices/local/health',{headers:AUTH})).json();
-    assert.equal(localHealth.reachable,true);
+    assert.deepEqual(localHealth,{reachable:true});
     const remoteHealth=await (await fetch(`${base}/devices/${a.id}/health`,{headers:AUTH})).json();
-    assert.equal(remoteHealth.reachable,true);
-    assert.equal(remoteHealth.latencyMs,3);
-    assert.doesNotMatch(JSON.stringify(remoteHealth),/abk_SECRET/);
-    // 删除：未知 404、本机 400、远程 200。契约写 {removed:true}，实现返回 {removed:id}（见审计报告偏差）。
+    assert.deepEqual(remoteHealth,{reachable:true,latencyMs:3});
+    assert.doesNotMatch(JSON.stringify(remoteHealth),/abk_SECRET|baseUrl|name/);
+    // 删除：未知 404、本机 400、远程 200，响应 {removed:true}（RISK-02）。
     assert.equal((await fetch(base+'/devices/missing',{method:'DELETE',headers:AUTH})).status,404);
     assert.equal((await fetch(base+'/devices/local',{method:'DELETE',headers:AUTH})).status,400);
     const deleted=await (await fetch(`${base}/devices/${a.id}`,{method:'DELETE',headers:AUTH})).json();
-    assert.equal(deleted.removed,a.id);
+    assert.deepEqual(deleted,{removed:true});
     assert.equal((await fetch(`${base}/snapshot?device=${encodeURIComponent(a.id)}`,{headers:AUTH})).status,404);
     assert.doesNotMatch(JSON.stringify(responses),/abk_SECRET/);
   });

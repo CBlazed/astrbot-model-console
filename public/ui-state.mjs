@@ -61,8 +61,12 @@ export function saveDevice(storage,id){
 }
 /** Snapshot URL: local (or no selection) never sends a device parameter. */
 export function snapshotPath(deviceId){return deviceId&&deviceId!=='local'?`/snapshot?device=${encodeURIComponent(deviceId)}`:'/snapshot';}
-/** A remote snapshot is read-only; a snapshot without a device field is the legacy local view. */
-export function isRemoteSnapshot(snapshot){return snapshot?.device?.kind==='http';}
+/** A remote snapshot is read-only; missing device means the legacy local view. Epic-2: ssh/agent are remote too. */
+export function isRemoteSnapshot(snapshot){const kind=snapshot?.device?.kind;return typeof kind==='string'&&kind.length>0&&kind!=='local';}
+/** Normalized device kind: legacy records without kind are http, 'local' is the built-in local device. */
+export function deviceKind(device){if(!device||typeof device!=='object')return 'http';if(device.kind==='local'||device.id==='local')return 'local';return device.kind==='ssh'||device.kind==='agent'?device.kind:'http';}
+export const deviceKindLabels={local:'本机',http:'HTTP',ssh:'SSH',agent:'Agent'};
+export function deviceKindLabel(kind){return deviceKindLabels[kind]??deviceKindLabels.http;}
 /** Device selector options: local first, then remote devices; falls back to local-only before /devices is available. */
 export function deviceOptions(devices){
  const list=Array.isArray(devices)?devices.filter(device=>device&&typeof device.id==='string'&&device.id):[];
@@ -78,8 +82,39 @@ export function healthBadge(health){
  return {text:typeof health.error==='string'&&health.error?health.error:'不可达',kind:'bad'};
 }
 /** Readable device errors; empty string means the code is not device-related. */
-export const deviceErrors={DEVICE_AUTH_FAILED:'远程设备凭据无效或已被撤销，请在设备设置中更新 OpenAPI Key。',DEVICE_FORBIDDEN:'远程设备缺少所需权限（scope），请检查 OpenAPI Key 的授权范围。',DEVICE_UNREACHABLE:'远程设备不可达，请确认目标机 AstrBot 正在运行且地址可访问。',DEVICE_NOT_FOUND:'设备不存在，可能已被删除。',DEVICE_INVALID:'设备信息不合法，请检查名称与地址。',DEVICE_SECRET_REQUIRED:'添加 HTTP 设备需要 OpenAPI Key。',DEVICE_EXISTS:'设备已存在，请换一个名称或地址。',DEVICE_INVALID_RESPONSE:'远程设备返回了无法解析的响应。',DEVICE_API_REJECTED:'远程 AstrBot 拒绝了该请求。'};
+export const deviceErrors={DEVICE_AUTH_FAILED:'远程设备凭据无效或已被撤销，请在设备设置中更新 OpenAPI Key。',DEVICE_FORBIDDEN:'远程设备缺少所需权限（scope），请检查 OpenAPI Key 的授权范围。',DEVICE_UNREACHABLE:'远程设备不可达，请确认目标机 AstrBot 正在运行且地址可访问。',DEVICE_NOT_FOUND:'设备不存在，可能已被删除。',DEVICE_INVALID:'设备信息不合法，请检查名称与地址。',DEVICE_SECRET_REQUIRED:'添加 HTTP/SSH 设备需要 OpenAPI Key。',DEVICE_EXISTS:'设备已存在（同类型且地址相同），请换一个名称或地址。',DEVICE_INVALID_RESPONSE:'远程设备返回了无法解析的响应。',DEVICE_API_REJECTED:'远程 AstrBot 拒绝了该请求。',DEVICE_SSH_UNAVAILABLE:'本机未找到 ssh 命令，无法建立 SSH 隧道。',DEVICE_SSH_FAILED:'SSH 隧道建立或转发失败，请检查主机、端口、用户与私钥路径。',DEVICE_PORT_UNKNOWN:'无法从远端日志发现 dashboard 端口，请确认远端数据目录，或在地址中直接填写端口。',AGENT_UNREACHABLE:'Agent 不可达，请确认 Agent 进程正在运行且地址与端口正确。',AGENT_PAIR_FAILED:'Agent 配对失败，请检查配对码是否有效（一次性、10 分钟内有效）。',AGENT_AUTH_FAILED:'Agent 设备令牌无效或已失效，请删除设备后重新配对。',AGENT_TOKEN_EXPIRED:'Agent 设备令牌已过期，请重新配对。',AGENT_INVALID_RESPONSE:'Agent 返回了无法解析的响应。',DEVICE_NAME_REQUIRED:'请填写设备名称。',DEVICE_BASEURL_REQUIRED:'请填写设备地址（baseUrl）。',DEVICE_PAIRING_REQUIRED:'请填写 Agent 配对码。',DEVICE_SSH_HOST_REQUIRED:'SSH 设备需要填写主机地址。',DEVICE_SSH_USER_REQUIRED:'SSH 设备需要填写登录用户。'};
 export function deviceErrorText(code){return typeof code==='string'?deviceErrors[code]??'':'';}
+/** Validate the device form and build the POST /devices payload (kind defaults to http for legacy forms). */
+export function validateDeviceInput(input){
+ const kind=input?.kind==='ssh'||input?.kind==='agent'?input.kind:'http';
+ const name=typeof input?.name==='string'?input.name.trim():'';
+ const baseUrl=typeof input?.baseUrl==='string'?input.baseUrl.trim():'';
+ const errors=[],payload={name,kind,baseUrl};
+ if(!name)errors.push('DEVICE_NAME_REQUIRED');
+ if(!baseUrl)errors.push('DEVICE_BASEURL_REQUIRED');
+ const apiKey=typeof input?.apiKey==='string'?input.apiKey.trim():'';
+ if(kind==='http'||kind==='ssh'){if(!apiKey)errors.push('DEVICE_SECRET_REQUIRED');else payload.apiKey=apiKey;}
+ if(kind==='agent'){const pairingCode=typeof input?.pairingCode==='string'?input.pairingCode.trim():'';if(!pairingCode)errors.push('DEVICE_PAIRING_REQUIRED');else payload.pairingCode=pairingCode;}
+ if(kind==='ssh'){
+  const host=typeof input?.host==='string'?input.host.trim():'';
+  const user=typeof input?.user==='string'?input.user.trim():'';
+  if(!host)errors.push('DEVICE_SSH_HOST_REQUIRED');
+  if(!user)errors.push('DEVICE_SSH_USER_REQUIRED');
+  const ssh={host,user};
+  const port=Number(input?.port);
+  if(Number.isInteger(port)&&port>0&&port<=65535)ssh.port=port;
+  if(typeof input?.keyPath==='string'&&input.keyPath.trim())ssh.keyPath=input.keyPath.trim();
+  if(typeof input?.dataPath==='string'&&input.dataPath.trim())ssh.dataPath=input.dataPath.trim();
+  payload.ssh=ssh;
+ }
+ return {ok:errors.length===0,errors,payload};
+}
+/** Recent BACKUP_* warnings from GET /backups, capped for display. */
+export function backupWarnings(warnings,limit=5){
+ return (Array.isArray(warnings)?warnings:[]).filter(warning=>warning&&(warning.code||warning.message)).slice(0,Math.max(0,limit)).map(warning=>({code:typeof warning.code==='string'&&warning.code?warning.code:'BACKUP_WARNING',time:typeof warning.time==='string'?warning.time:'',message:typeof warning.message==='string'?warning.message:''}));
+}
+/** Snapshot config version shown in the header (RISK-05). */
+export function configVersionText(snapshot){const value=snapshot?.configVersion;return `配置版本 ${value===undefined||value===null||value===''?'未知':String(value)}`;}
 
 /** Binding status pills. field-missing means the path is absent from config, not an unverified empty value. */
 export const bindingStatuses={configured:{label:'已配置',kind:'good'},missing:{label:'引用缺失',kind:'bad'},disabled:{label:'模型禁用',kind:'bad'},'field-missing':{label:'字段不存在',kind:'bad'},'per-session':{label:'跟随会话',kind:'warn'},'empty-semantics-unverified':{label:'待核实',kind:'warn'}};

@@ -1,10 +1,10 @@
 # AstrBot 模型切换器（Model Console）
 
-本机优先的 AstrBot 模型管理工具，支持只读查看局域网/远程设备，可打包分发给其他用户。Node.js 24.22+、零第三方运行依赖、ESM + JSDoc，不使用 Python。
+本机优先的 AstrBot 模型管理工具，支持 HTTP/SSH/Agent 远程设备只读查看，可打包分发给其他用户（便携 node 包，无安装器）。Node.js 24.22+、零第三方运行依赖、ESM + JSDoc，不使用 Python。
 
 **接手入口：[设计与维护交接文档](docs/HANDOVER.zh-CN.md)。** 该文档统一记录当前实现、维护流程、身份来源、API、测试、故障定位和已知限制。
 
-**2026-10-29 文档：** [设计缺陷评审](docs/REVIEW-2026-10-29.zh-CN.md)、[P0 独立审计](docs/P0-AUDIT-2026-10-29.md)、[P1/P2 待修复清单](docs/BACKLOG-2026-10-29.zh-CN.md)、[Sprint 审计](docs/SPRINT-AUDIT-2026-10-29.md)、[多设备与可分发改造设计](docs/DESIGN-multi-device-2026-10-29.zh-CN.md)、[打包与安装](docs/BUILD.zh-CN.md)。
+**2026-10-29 文档：** [设计缺陷评审](docs/REVIEW-2026-10-29.zh-CN.md)、[P0 独立审计](docs/P0-AUDIT-2026-10-29.md)、[P1/P2 待修复清单](docs/BACKLOG-2026-10-29.zh-CN.md)、[Sprint 审计](docs/SPRINT-AUDIT-2026-10-29.md)、[Epic-2/3 审计](docs/EPIC2-AUDIT-2026-10-29.md)、[多设备与可分发改造设计](docs/DESIGN-multi-device-2026-10-29.zh-CN.md)、[便携包构建](docs/BUILD.zh-CN.md)。
 
 ## 启动与构建
 
@@ -29,9 +29,9 @@ node scripts/build-package.mjs --zip # 另生成 zip
 - 单实例锁；同一状态目录只允许一个控制台进程。
 - 备份保留（默认 10 份，`MODEL_CONSOLE_BACKUP_KEEP`）+ 总大小上限（`MODEL_CONSOLE_BACKUP_MAX_MB`，默认 2048MB）+ 备份列表/清理/恢复入口（恢复会覆盖该资源完整对象）。
 - 诊断日志 `diagnostics.jsonl`（1 MiB 滚动、保留 3 份、脱敏）。
-- 远程设备（只读）：注册表 + OpenAPI Key，`/snapshot?device=` 看远程配置；远程写操作尚未开放。
-- 首启向导、设备选择器、远程设备健康徽标；`/health` 返回版本/数据目录/状态目录/读写模式。
-- 便携打包：内置 node.exe、SHA256SUMS、per-user Inno 安装器脚本。
+- 远程设备（只读）：HTTP（OpenAPI Key）、SSH（本机 ssh 隧道 + 远端日志自动发现端口）、Agent（同程序 `node src/agent.mjs` 配对）；`/snapshot?device=` 看远程配置，远程写操作尚未开放。
+- 首启向导、设备选择器、远程设备健康徽标、配置版本；`/health` 返回控制台版本/数据目录/状态目录/读写模式。
+- 便携打包：内置 node.exe、SHA256SUMS、`--zip`；解压双击 `start.cmd`，无安装器、无自动更新（升级=替换目录）。
 
 ## 必须保留的边界
 
@@ -41,7 +41,7 @@ node scripts/build-package.mjs --zip # 另生成 zip
 - 插件隐藏 schema、动态调用和数组字段覆盖不完整。
 - 向量/重排序切换需单独迁移；没有跨资源原子事务，恢复也是整对象回写。
 - AstrBot 无原子 CAS；版本检查只能缩小竞态窗口。
-- 远程设备目前只读；SSH 隧道/Agent 未实现。
+- 远程设备（HTTP/SSH/Agent）目前只读；远程写、Agent 本地备份/热加载验证未开放。
 - 真实模型配置是用户可变状态，不按历史对话强制恢复。
 
 ## API 与源码
