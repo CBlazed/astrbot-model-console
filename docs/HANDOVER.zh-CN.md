@@ -103,8 +103,7 @@
 | `public/app.mjs` | DOM、刷新、草稿、预览、顺序保存 | 使用 textContent；不能插入配置为 HTML |
 | `public/ui-state.mjs` | 可测试的草稿、分组、候选模型、身份卡片、冲突 diff、设备选择、token 持久化 | 维持 bot view 与 profile resource 的区别 |
 | `test/*.test.mjs` | 纯逻辑、HTTP、安全、备份/恢复、设备/适配器、a11y 和身份回归 | 写入使用 fake gateway，不动线上配置 |
-| `start-console.cmd` | 只读启动并打开浏览器 | 普通检查优先使用 |
-| `start-console-edit.cmd` | 显式启用保存并打开浏览器 | 保存仍需预览与用户确认 |
+| `start-console-edit.cmd` | 唯一启动入口：启用保存并打开浏览器（编辑模式） | 保存仍需预览与用户确认；无独立只读脚本，临时只读用 `node src/server.mjs --open` |
 | 状态目录（默认 `%LOCALAPPDATA%\AstrBotModelConsole\state`） | 备份、审计、诊断、设备、密钥、锁 | 含敏感数据，不能分享或提交 |
 
 `.gitignore` 排除 state/、node_modules/ 和 *.log。它不是文件访问保护；仍不能把项目根目录直接映射为静态目录。
@@ -258,10 +257,10 @@ AstrBot 返回体由 gateway 去掉data外层，并适配 provider/config/info_l
 cd 'model-console'
 node --version
 node --test --test-isolation=none   # 受限沙箱里 node --test 会因 spawn EPERM 失败；正常环境可省参数
-# 双击脚本或在当前终端执行：
-.\start-console.cmd
-# 需要编辑时才使用：
+# 唯一启动入口（编辑模式；保存仍需预览+确认）：
 .\start-console-edit.cmd
+# 临时只读查看（不推荐日常用）：
+node src/server.mjs --open
 # 远程 Agent（可选；给 Hub 配对用，只读）：
 node src/agent.mjs --port=0 --state=<state目录>
 # 便携包：

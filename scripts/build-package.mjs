@@ -4,13 +4,13 @@
  *
  * Usage: node scripts/build-package.mjs [--zip] [--out <dir>] [--help]
  *
- * Copies a strict whitelist (src/, public/, package.json, start-console*.cmd, README, necessary
- * docs) into <out>/AstrBotModelConsole, bundles node.exe + the Node license, writes start.cmd /
- * start-edit.cmd and SHA256SUMS.txt, and optionally builds the portable zip with PowerShell
- * Compress-Archive (visible window, never hidden).
+ * Copies a strict whitelist (src/, public/, package.json, README, necessary docs) into
+ * <out>/AstrBotModelConsole, bundles node.exe + the Node license, writes start.cmd and
+ * SHA256SUMS.txt, and optionally builds the portable zip with PowerShell Compress-Archive
+ * (visible window, never hidden).
  *
  * Portable-only by design: no installer, no auto-update. Users extract the zip and double-click
- * start.cmd; upgrading means replacing the folder.
+ * start.cmd (edit mode; saves still require preview + Apply); upgrading means replacing the folder.
  *
  * Never copy state/, .git/, .tmp*, *.log or tests: user data and secrets stay out of the package.
  */
@@ -25,7 +25,7 @@ const PRODUCT='AstrBotModelConsole';
 const SCRIPT_DIR=dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT=resolve(SCRIPT_DIR,'..');
 const REQUIRED_DIRS=['src','public'];
-const REQUIRED_FILES=['package.json','README.md','start-console.cmd','start-console-edit.cmd'];
+const REQUIRED_FILES=['package.json','README.md'];
 const REQUIRED_DOCS=['docs/HANDOVER.zh-CN.md'];
 const OPTIONAL_DOCS=['docs/BUILD.zh-CN.md','docs/DESIGN-multi-device-2026-10-29.zh-CN.md'];
 const SKIP_NAMES=new Set(['.git','node_modules','state','dist','test','scripts']);
@@ -188,8 +188,7 @@ async function main(){
   }catch{}
   if(!nodeLicense)console.warn('警告：未找到 Node 的 LICENSE 文件，分发前请自行确认许可证合规。');
 
-  await writeFile(join(target,'start.cmd'),launcher(['--open'],'AstrBot Model Console (read-only). Close this window to stop it.'),'utf8');
-  await writeFile(join(target,'start-edit.cmd'),launcher(['--enable-writes','--open'],'AstrBot Model Console (editing). Changes still require preview and Apply in the browser.'),'utf8');
+  await writeFile(join(target,'start.cmd'),launcher(['--enable-writes','--open'],'AstrBot Model Console (editing). Changes still require preview and Apply in the browser. Close this window to stop it.'),'utf8');
 
   const files=(await listFiles(target)).filter(file=>basename(file)!=='SHA256SUMS.txt').sort();
   const lines=[];let totalBytes=0;
@@ -204,7 +203,7 @@ async function main(){
   console.log(`  输出：${target}`);
   console.log(`  文件：${files.length} 个，合计 ${(totalBytes/1048576).toFixed(1)} MB`);
   console.log(`  校验：${join(target,'SHA256SUMS.txt')}（${lines.length} 行）`);
-  console.log('  运行方式：解压后双击 start.cmd（只读模式，无需安装）；需要编辑请用 start-edit.cmd');
+  console.log('  运行方式：解压后双击 start.cmd（编辑模式，无需安装；保存仍需预览+Apply）');
   console.log('  说明：便携包，无安装器、无自动更新；升级=替换整个目录，用户数据留在 state/');
 
   if(options.zip){

@@ -43,7 +43,7 @@ node scripts/build-package.mjs --help
 构建成功时会在最后打印版本、输出目录、文件数、SHA 清单行数，以及：
 
 ```
-运行方式：解压后双击 start.cmd（只读模式，无需安装）；需要编辑请用 start-edit.cmd
+运行方式：解压后双击 start.cmd（编辑模式，无需安装；保存仍需预览+Apply）
 说明：便携包，无安装器、无自动更新；升级=替换整个目录，用户数据留在 state/
 ```
 
@@ -53,10 +53,7 @@ node scripts/build-package.mjs --help
 dist\AstrBotModelConsole\
 ├─ node.exe                 随包 Node（来自构建机的 process.execPath）
 ├─ LICENSE.node.txt         Node 许可证（随 Node 分发要求；找不到时会告警）
-├─ start.cmd                推荐入口：用相对路径的 node.exe 启动，只读模式
-├─ start-edit.cmd           编辑模式入口（--enable-writes，仍需在浏览器里预览并 Apply）
-├─ start-console.cmd        开发脚本（依赖 PATH 里的 node，包内同样保留）
-├─ start-console-edit.cmd
+├─ start.cmd                唯一入口：用相对路径的 node.exe 启动（编辑模式，保存仍需预览+Apply）
 ├─ package.json
 ├─ README.md
 ├─ SHA256SUMS.txt           逐文件 sha256 校验清单
@@ -82,7 +79,7 @@ zip 内顶层就是 `AstrBotModelConsole\` 目录，解压后双击 `start.cmd` 
 
 1. 解压 `AstrBotModelConsole-<version>-win-<arch>.zip` 到任意目录（不要放在 C:\Program Files 等需要
    管理员权限的位置；普通用户目录即可）。
-2. 双击 `start.cmd`（只读模式）或 `start-edit.cmd`（编辑模式）。
+2. 双击 `start.cmd`（编辑模式；保存时仍需在浏览器里预览并 Apply）。
 3. 浏览器会打开控制台；关闭命令行窗口即停止服务。
 
 `start.cmd` 只使用包内的 `node.exe`，所以目标机器**不需要预装 Node.js**。
@@ -95,10 +92,10 @@ AstrBot 数据目录管理，也可以用 `MODEL_CONSOLE_STATE` 指定到独立�
 ```powershell
 cd dist\AstrBotModelConsole
 .\start.cmd
-.\start-edit.cmd
 ```
 
-开发场景仍可使用 `start-console.cmd` / `start-console-edit.cmd`（依赖 PATH 里的 `node`，不是分发入口）。
+开发场景使用仓库里的 `start-console-edit.cmd`（依赖 PATH 里的 `node`，不是分发入口）。仓库不再提供
+只读启动脚本；需要只读检查时临时用 `node src/server.mjs --open`。
 
 ## 4. 校验产物
 
@@ -133,9 +130,10 @@ zip 的 sha256 会在 `--zip` 构建输出的最后一行打印，可随 zip 一
 
 ```
 src/  public/  package.json  README.md
-start-console.cmd  start-console-edit.cmd
 docs/HANDOVER.zh-CN.md  docs/BUILD.zh-CN.md  docs/DESIGN-multi-device-2026-10-29.zh-CN.md
 ```
+
+（`start.cmd` 由构建脚本生成，不来自源码树。）
 
 明确排除（即使出现在源码树里也不会进包）：
 
@@ -167,7 +165,7 @@ docs/HANDOVER.zh-CN.md  docs/BUILD.zh-CN.md  docs/DESIGN-multi-device-2026-10-29
 |---|---|
 | `node.exe is missing next to start.cmd` | 只拷了部分文件；重新解压完整包，或重新运行构建脚本 |
 | 双击 `start.cmd` 后窗口闪退 | 该窗口会保留错误输出并 `pause`；也可能是 AstrBot data 目录未发现，按提示设置 `ASTRBOT_DATA` |
-| `start-console.cmd` 报找不到 node | 它是开发脚本，用 PATH 里的 `node`；分发场景请用 `start.cmd`（包内 node.exe） |
+| `start-console-edit.cmd` 报找不到 node | 它是源码目录的开发脚本，用 PATH 里的 `node`；分发场景请用 `start.cmd`（包内 node.exe） |
 | 目标机器没有 Node.js | 不需要安装；`start.cmd` 使用包内自带的 `node.exe` |
 | `--zip` 失败 | 检查 PowerShell 是否可用、磁盘空间；zip 会把 `node.exe` 一并压缩（约 40–60 MB） |
 | 杀毒软件误报 | 构建只用 `node` 与可见窗口的 PowerShell（`Compress-Archive`）；不要再加隐藏窗口/停止进程类脚本 |

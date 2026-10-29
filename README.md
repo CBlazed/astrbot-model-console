@@ -11,12 +11,15 @@
 ```powershell
 cd 'model-console'
 node --test --test-isolation=none   # 受限沙箱里 node --test 可能因 spawn EPERM 失败，用这个兜底
-.\start-console.cmd                  # 只读
-.\start-console-edit.cmd             # 允许保存（仍需预览+确认）
+.\start-console-edit.cmd             # 唯一启动入口：编辑模式（保存仍需预览+确认）
+# 临时只读查看（不推荐日常用）：
+node src/server.mjs --open
 
 node scripts/build-package.mjs       # 便携包（含 node.exe + SHA256SUMS）
 node scripts/build-package.mjs --zip # 另生成 zip
 ```
+
+没有独立的只读启动脚本：这个工具的目标就是方便修改，编辑模式同样能完成排查；只是保存时仍要在界面里预览并确认。便携包内同样只有一个 `start.cmd`（编辑模式）。
 
 `ASTRBOT_DATA` 不再写死在脚本里：优先用环境变量，否则自动扫描 `%USERPROFILE%\.astrbot_launcher\instances\*\core\data` 与 `%USERPROFILE%\.astrbot\data`，唯一命中才自动使用。默认随机端口，仅监听 127.0.0.1。状态目录（备份/审计/锁/设备/诊断）默认在 `%LOCALAPPDATA%\AstrBotModelConsole\state`，可用 `MODEL_CONSOLE_STATE` 覆盖；项目内旧 `state/` 只提示、不迁移。令牌存 `sessionStorage`（刷新存活、关标签失效），URL 片段读取后清除。
 
@@ -34,7 +37,7 @@ node scripts/build-package.mjs --zip # 另生成 zip
 - 设备凭据：Hub 侧 `secrets.json` 用 Windows DPAPI 加密（`dpapi:`），DPAPI 不可用时降级明文并在诊断留痕；Agent 只存 token/配对码哈希。
 - 首启向导、设备选择器、远程设备健康徽标、配置版本；`/health` 返回控制台版本/数据目录/状态目录/读写模式。
 - 真实浏览器验收截图：[docs/assets/e2e-home-2026-10-29.png](docs/assets/e2e-home-2026-10-29.png)（Chrome headless，fake AstrBot 数据）。
-- 便携打包：内置 node.exe、SHA256SUMS、`--zip`；解压双击 `start.cmd`，无安装器、无自动更新（升级=替换目录）。
+- 便携打包：内置 node.exe、SHA256SUMS、`--zip`；解压双击 `start.cmd`（编辑模式），无安装器、无自动更新（升级=替换目录）。
 
 ## 必须保留的边界
 
