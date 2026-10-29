@@ -1,5 +1,10 @@
 # AstrBot 模型控制台（Model Console）
 
+[![ci](https://github.com/CBlazed/astrbot-model-console/actions/workflows/ci.yml/badge.svg)](https://github.com/CBlazed/astrbot-model-console/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**下载**：[Releases 便携包](https://github.com/CBlazed/astrbot-model-console/releases/latest) · [使用说明](docs/USAGE.zh-CN.md) · [FAQ](docs/FAQ.zh-CN.md)
+
 在浏览器里集中查看和切换 AstrBot 的模型绑定：核心配置、机器人实例、插件、模型库；改完先预览、再备份、再写入，支持 HTTP / SSH / Agent 远程设备。
 
 Windows 便携包解压即用，**不需要安装 Node.js、没有安装器、没有自动更新**；源码零第三方运行依赖。
