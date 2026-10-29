@@ -32,7 +32,7 @@ AstrBot 的模型配置分散在三个地方：profile 配置（主对话、压�
 - 核心配置每个 profile 的 6 类绑定：主对话、压缩、图片描述、STT、TTS、长期记忆图片描述。
 - 15 个插件字段，覆盖 4 个插件：`group_chat_plus`、`livingmemory`、`self_learning`、`meme_manager`（LLM / vision / embedding / rerank）。
 - 模型库：共享 provider 定义、已登记引用、推理强度（`reasoning_effort`）。
-- **网页搜索设置**（AstrBot 本体-网页搜索提供商）：启用开关 + 提供商下拉；内置 9 项，只有检测到并启用 `astrbot_plugin_model_websearch` 时才出现「跟随当前聊天模型（模型原生搜索）」；插件缺失/未启用/插件列表不可读时自动退回内置提供商。
+- **网页搜索设置**（AstrBot 本体-网页搜索提供商）：启用开关 + 提供商下拉；内置 9 项，只有检测到并启用 [`astrbot_plugin_model_websearch`](https://github.com/CBlazed/astrbot_plugin_model_websearch) 时才出现「跟随当前聊天模型（模型原生搜索）」；插件缺失/未启用/插件列表不可读时自动退回内置提供商。
 - **内置搜索 API Key**：按所选内置提供商显示 Key 编辑行，支持多 Key（每行一个）、清空与「测试 Key」；已保存的 Key 永远不回显，只显示「已配置 N 个」。Key 改动需点「确认添加/替换」才会进入待应用变更。
 - **模型原生搜索**：可额外指定「搜索使用模型」（空=跟随当前聊天模型），并提供「测试模型原生搜索」按钮，用真实 `web_search` 请求验证所选模型是否真的会联网。
 
