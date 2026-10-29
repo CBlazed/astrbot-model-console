@@ -1,54 +1,63 @@
 # AstrBot 模型切换器（Model Console）
 
-独立运行的本机模型管理工具。Node.js 24.22+、零第三方运行依赖、ESM + JSDoc，不使用 Python。已包含 JSON 后端和浏览器 UI。
+本机优先的 AstrBot 模型管理工具，支持只读查看局域网/远程设备，可打包分发给其他用户。Node.js 24.22+、零第三方运行依赖、ESM + JSDoc，不使用 Python。
 
-**接手入口：[设计与维护交接文档](docs/HANDOVER.zh-CN.md)。** 该文档统一记录当前实现、维护流程、身份来源、API、测试、故障定位和已知限制；更新架构或行为时一起维护。
+**接手入口：[设计与维护交接文档](docs/HANDOVER.zh-CN.md)。** 该文档统一记录当前实现、维护流程、身份来源、API、测试、故障定位和已知限制。
 
-**2026-10-29 评审、P0 修复与改造提案：** [设计缺陷评审](docs/REVIEW-2026-10-29.zh-CN.md)（含 P0 修复状态）、[P0 独立审计](docs/P0-AUDIT-2026-10-29.md)、[P1/P2 待修复清单](docs/BACKLOG-2026-10-29.zh-CN.md)、[多设备与可分发改造设计](docs/DESIGN-multi-device-2026-10-29.zh-CN.md)（未实施）。
+**2026-10-29 文档：** [设计缺陷评审](docs/REVIEW-2026-10-29.zh-CN.md)、[P0 独立审计](docs/P0-AUDIT-2026-10-29.md)、[P1/P2 待修复清单](docs/BACKLOG-2026-10-29.zh-CN.md)、[Sprint 审计](docs/SPRINT-AUDIT-2026-10-29.md)、[多设备与可分发改造设计](docs/DESIGN-multi-device-2026-10-29.zh-CN.md)、[打包与安装](docs/BUILD.zh-CN.md)。
 
-## 启动
+## 启动与构建
 
 ```powershell
 cd 'model-console'
 node --test --test-isolation=none   # 受限沙箱里 node --test 可能因 spawn EPERM 失败，用这个兜底
-.\start-console.cmd
-# 需要编辑配置时使用：
-.\start-console-edit.cmd
+.\start-console.cmd                  # 只读
+.\start-console-edit.cmd             # 允许保存（仍需预览+确认）
+
+node scripts/build-package.mjs       # 便携包（含 node.exe + SHA256SUMS）
+node scripts/build-package.mjs --zip # 另生成 zip
 ```
 
-`ASTRBOT_DATA` 不再写死在脚本里：优先用环境变量，否则自动扫描 `%USERPROFILE%\.astrbot_launcher\instances\*\core\data` 与 `%USERPROFILE%\.astrbot\data`，唯一命中才自动使用；多个/零个会给出可读提示。默认随机端口，仅监听 127.0.0.1。状态目录（备份/审计/锁）默认在 `%LOCALAPPDATA%\AstrBotModelConsole\state`，可用 `MODEL_CONSOLE_STATE` 覆盖；项目内旧 `state/` 只提示、不迁移。启动脚本会打开带本次工具会话令牌的浏览器地址，前端读取后清除 URL 片段，令牌存 `sessionStorage`（刷新存活、关标签失效）。不要分享带令牌的链接或启动日志。
+`ASTRBOT_DATA` 不再写死在脚本里：优先用环境变量，否则自动扫描 `%USERPROFILE%\.astrbot_launcher\instances\*\core\data` 与 `%USERPROFILE%\.astrbot\data`，唯一命中才自动使用。默认随机端口，仅监听 127.0.0.1。状态目录（备份/审计/锁/设备/诊断）默认在 `%LOCALAPPDATA%\AstrBotModelConsole\state`，可用 `MODEL_CONSOLE_STATE` 覆盖；项目内旧 `state/` 只提示、不迁移。令牌存 `sessionStorage`（刷新存活、关标签失效），URL 片段读取后清除。
 
 ## 当前能力
 
-- 总览、本体/插件卡片、模型库、待应用面板与应用前确认。
-- 从真实AstrBot实例/路由读取身份信息；机器人实例与配置档案分开。
-- 使用default的bot独立显示；闲置profile仅在未使用配置档案组出现。
-- 核心与插件已审查字段的读取、能力校验、单资源修改、备份、API保存与回读。
-- 前台自动同步、后台暂停刷新、草稿保留、冲突检查和脱敏审计。
-- 共享provider推理强度能力查询；不从模型名猜支持级别。
+- 总览、本体/插件卡片、模型库、待应用面板、预览与确认、单资源保存与回读。
+- 身份只来自 AstrBot 实例与平台级路由；default 是合法配置目标；闲置 profile 单独分组。
+- 前台自动同步、草稿保留、冲突 diff 与“以最新值重新编辑”、只读/可写状态、脱敏审计。
+- 推理强度按后端能力目录放行，不从模型名猜。
 - 单实例锁；同一状态目录只允许一个控制台进程。
-- 备份默认保留最近 10 份（`MODEL_CONSOLE_BACKUP_KEEP` 可调）。
+- 备份保留（默认 10 份，`MODEL_CONSOLE_BACKUP_KEEP`）+ 总大小上限（`MODEL_CONSOLE_BACKUP_MAX_MB`，默认 2048MB）+ 备份列表/清理/恢复入口（恢复会覆盖该资源完整对象）。
+- 诊断日志 `diagnostics.jsonl`（1 MiB 滚动、保留 3 份、脱敏）。
+- 远程设备（只读）：注册表 + OpenAPI Key，`/snapshot?device=` 看远程配置；远程写操作尚未开放。
+- 首启向导、设备选择器、远程设备健康徽标；`/health` 返回版本/数据目录/状态目录/读写模式。
+- 便携打包：内置 node.exe、SHA256SUMS、per-user Inno 安装器脚本。
 
 ## 必须保留的边界
 
 - 保存/回读成功不等于热加载或模型生成成功。
-- 仅当前平台级路由视图；不完整解析任意会话/通配符路由。
-- profile/人格显示名不是机器人身份；实例标识不等于QQ昵称。
-- 插件隐藏schema、动态调用和数组字段覆盖不完整，不能宣称所有选项均已支持。
-- 向量/重排序切换需单独迁移；没有一键回滚或跨资源原子事务。
-- AstrBot无原子CAS，版本检查无法消除最后瞬间的外部竞态。
-- 真实模型配置是用户可变状态，不按历史对话强制恢复模型或强度。
+- 仅当前平台级路由视图；不完整解析会话/通配符路由（界面会提示 granular>0）。
+- profile/人格显示名不是机器人身份；实例标识不等于 QQ 昵称。
+- 插件隐藏 schema、动态调用和数组字段覆盖不完整。
+- 向量/重排序切换需单独迁移；没有跨资源原子事务，恢复也是整对象回写。
+- AstrBot 无原子 CAS；版本检查只能缩小竞态窗口。
+- 远程设备目前只读；SSH 隧道/Agent 未实现。
+- 真实模型配置是用户可变状态，不按历史对话强制恢复。
 
 ## API 与源码
 
 | 路径 | 用途 |
 |---|---|
-| GET /health | 本工具健康检查 |
-| GET /snapshot | 去密钥后的模型、资源、绑定和revision |
+| GET /health | 健康 + version/dataPath/stateDir/readOnly |
+| GET /snapshot[?device=] | 去密钥后的模型、资源、绑定、revision、routing |
 | GET /capabilities?provider_id=... | 推理级别与核实状态 |
-| POST /plans | 修改预览计划 |
+| POST /plans / POST /restore-plans | 修改/恢复预览计划 |
 | POST /apply | 显式开启编辑模式后应用 |
+| GET /backups、POST /backups/prune | 备份列表与清理 |
+| GET /backups/:id/diff | 恢复前差异（已审查字段） |
+| GET/POST/DELETE /devices、GET /devices/:id/health | 远程设备注册表 |
+| GET /diagnostics/export | 诊断事件导出 |
 
-静态资源之外所有路由需要本次工具令牌，并受Host/Origin校验。AstrBot JWT与上游密钥只在后端使用。
+静态资源之外所有路由需要本次工具令牌，并受 Host/Origin 校验。AstrBot JWT、OpenAPI Key 与上游密钥只在后端使用。
 
-后端位于src/，界面位于public/，测试位于test/。state/包含敏感备份、审计、令牌启动日志，不可发布、上传或提交。详细模块和维护步骤见交接文档。
+后端位于 `src/`，界面位于 `public/`，测试位于 `test/`，构建脚本位于 `scripts/`。状态目录含敏感备份/密钥，不可发布、上传或提交。

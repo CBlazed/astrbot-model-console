@@ -11,7 +11,7 @@ export function groups(drafts){const result=new Map();for(const d of drafts.valu
 export function currentRevision(snapshot,resource){return resource.kind==='provider'?snapshot.models.find(m=>m.id===resource.id)?.revision:snapshot.resources.find(r=>resourceKey(r.resource)===resourceKey(resource))?.revision;}
 export const candidates=(models,capability)=>models.filter(m=>m.enabled&&m.capabilities.includes(capability));
 export const indexCapability=c=>['embedding','rerank'].includes(c);
-export const isIssue=b=>['missing','disabled'].includes(b.status);
+export const isIssue=b=>['missing','disabled','field-missing'].includes(b.status);
 export function counts(snapshot){return {models:snapshot.models.filter(m=>m.enabled).length,resources:snapshot.resources.length,bindings:snapshot.resources.reduce((n,r)=>n+(r.bindings?.length??0),0),issues:snapshot.resources.reduce((n,r)=>n+(r.status==='unavailable'?1:(r.bindings??[]).filter(isIssue).length),0)};}
 
 /** Session token: survives reload via sessionStorage, dies with the tab. Never persistent storage, never logged. */
@@ -48,6 +48,65 @@ export function saveToken(storage,token){
 export function clearToken(storage){
  if(!Boolean(storage)||typeof storage.removeItem!=='function')return false;
  try{storage.removeItem(tokenKey);return true;}catch{return false;}
+}
+
+/** Selected device (Epic-1): only an id is stored, never any credential. 'local' is represented as ''. */
+export const deviceStorageKey='model-console.device';
+export function loadDevice(storage){
+ try{const value=storage?.getItem?.(deviceStorageKey);return typeof value==='string'&&value&&value!=='local'?value:'';}catch{return '';}
+}
+export function saveDevice(storage,id){
+ if(!storage||typeof storage.setItem!=='function'||typeof id!=='string'||!id)return false;
+ try{storage.setItem(deviceStorageKey,id);return true;}catch{return false;}
+}
+/** Snapshot URL: local (or no selection) never sends a device parameter. */
+export function snapshotPath(deviceId){return deviceId&&deviceId!=='local'?`/snapshot?device=${encodeURIComponent(deviceId)}`:'/snapshot';}
+/** A remote snapshot is read-only; a snapshot without a device field is the legacy local view. */
+export function isRemoteSnapshot(snapshot){return snapshot?.device?.kind==='http';}
+/** Device selector options: local first, then remote devices; falls back to local-only before /devices is available. */
+export function deviceOptions(devices){
+ const list=Array.isArray(devices)?devices.filter(device=>device&&typeof device.id==='string'&&device.id):[];
+ const local=list.find(device=>device.kind==='local'||device.id==='local');
+ const options=[{value:'local',label:`本机${local?(local.readOnly?' · 只读':' · 可写'):''}`,kind:'local',readOnly:Boolean(local?.readOnly)}];
+ for(const device of list){if(local&&device.id===local.id)continue;if(device.id==='local')continue;options.push({value:device.id,label:device.name??device.id,kind:device.kind??'http',readOnly:device.readOnly!==false});}
+ return options;
+}
+/** Readable device health badge for the settings table. */
+export function healthBadge(health){
+ if(!health||typeof health!=='object')return {text:'未检测',kind:'warn'};
+ if(health.reachable===true)return {text:Number.isFinite(health.latencyMs)?`可达 · ${health.latencyMs}ms`:'可达',kind:'good'};
+ return {text:typeof health.error==='string'&&health.error?health.error:'不可达',kind:'bad'};
+}
+/** Readable device errors; empty string means the code is not device-related. */
+export const deviceErrors={DEVICE_AUTH_FAILED:'远程设备凭据无效或已被撤销，请在设备设置中更新 OpenAPI Key。',DEVICE_FORBIDDEN:'远程设备缺少所需权限（scope），请检查 OpenAPI Key 的授权范围。',DEVICE_UNREACHABLE:'远程设备不可达，请确认目标机 AstrBot 正在运行且地址可访问。',DEVICE_NOT_FOUND:'设备不存在，可能已被删除。',DEVICE_INVALID:'设备信息不合法，请检查名称与地址。',DEVICE_SECRET_REQUIRED:'添加 HTTP 设备需要 OpenAPI Key。',DEVICE_EXISTS:'设备已存在，请换一个名称或地址。',DEVICE_INVALID_RESPONSE:'远程设备返回了无法解析的响应。',DEVICE_API_REJECTED:'远程 AstrBot 拒绝了该请求。'};
+export function deviceErrorText(code){return typeof code==='string'?deviceErrors[code]??'':'';}
+
+/** Binding status pills. field-missing means the path is absent from config, not an unverified empty value. */
+export const bindingStatuses={configured:{label:'已配置',kind:'good'},missing:{label:'引用缺失',kind:'bad'},disabled:{label:'模型禁用',kind:'bad'},'field-missing':{label:'字段不存在',kind:'bad'},'per-session':{label:'跟随会话',kind:'warn'},'empty-semantics-unverified':{label:'待核实',kind:'warn'}};
+export function bindingStatus(status){const known=bindingStatuses[status];return known?{...known}:{label:String(status??'未知'),kind:'warn'};}
+
+/** A session/wildcard route exists, so cards only describe the platform-level view. */
+export function routingNoticeText(routing){
+ const granular=Number(routing?.granular??0);
+ if(!(granular>0))return '';
+ const total=Number.isFinite(Number(routing?.total))?Number(routing.total):granular;
+ return `本设备存在会话级/通配符路由（共 ${total} 条路由，其中细分路由 ${granular} 条），卡片仅代表平台级视图。`;
+}
+
+const displayValue=value=>value===undefined||value===null||value===''?'空值 / 跟随默认':String(value);
+/** Conflict diff: align local drafts with the latest server values. Missing server paths mean the field does not exist. */
+export function buildConflictRows(pending,current,labels={}){
+ const server=new Map();
+ if(Array.isArray(current)){for(const item of current)if(item&&typeof item.path==='string')server.set(item.path,item.value);}
+ else if(current&&typeof current==='object'){for(const [path,value] of Object.entries(current))server.set(path,value);}
+ const rows=[];
+ for(const change of Array.isArray(pending)?pending:[]){
+  if(!change||typeof change.path!=='string')continue;
+  const mine=displayValue(change.value);
+  const serverValue=server.has(change.path)?displayValue(server.get(change.path)):'字段不存在';
+  rows.push({path:change.path,label:labels[change.path]??change.path,mine,server:serverValue,changed:mine!==serverValue});
+ }
+ return rows;
 }
 
 /** Instance cards use their effective profile resource; unassigned archives never substitute for bots. */

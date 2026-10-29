@@ -89,15 +89,19 @@
 | `src/identity.mjs` | 实例/路由到公开身份 | 不加入 profile 名称、QQ 文件名等推断 |
 | `src/engine.mjs` | snapshot、revision、校验、计划、备份后保存和回读 | 单资源；失败可能已经写入 |
 | `src/backup.mjs` | 文件备份、SHA-256、SQLite 在线备份、quick_check | 备份失败必须阻断写入 |
-| `src/server.mjs` | HTTP、鉴权、静态白名单、CSP、请求体限制 | 不暴露源码、state 或备份 |
+| `src/server.mjs` | HTTP、鉴权、静态白名单、CSP、请求体限制、备份/恢复/设备路由 | 不暴露源码、state 或备份 |
+| `src/diagnostics.mjs` | 诊断日志（1 MiB 滚动、保留 3 份、脱敏、失败静默） | 不得记录 token/key/请求体/绝对路径 |
+| `src/devices.mjs` | 远程设备注册表 + 密钥分离存储（devices.json / secrets.json） | 响应/日志/诊断不得出现 apiKey；读写 state 用临时文件+rename |
+| `src/http-adapter.mjs` | 远程 AstrBot OpenAPI v1 适配器（Bearer API Key） | 只走 `/api/v1/`；错误映射 DEVICE_*；远程只读 |
 | `src/inspect.mjs` | 只读实际实例快照 | 不引入隐藏写操作或生成调用 |
+| `scripts/build-package.mjs` | 便携包/zip/Inno 脚本生成、SHA256SUMS | 只按白名单复制，排除 state/.git/.tmp/日志/测试 |
 | `public/index.html` / `styles.css` | UI 结构与视觉样式 | 选中态、响应式、焦点和错误状态 |
 | `public/app.mjs` | DOM、刷新、草稿、预览、顺序保存 | 使用 textContent；不能插入配置为 HTML |
-| `public/ui-state.mjs` | 可测试的草稿、分组、候选模型、身份卡片视图 | 维持 bot view 与 profile resource 的区别 |
-| `test/*.test.mjs` | 纯逻辑、HTTP、安全、备份和身份回归 | 写入使用 fake gateway，不动线上配置 |
+| `public/ui-state.mjs` | 可测试的草稿、分组、候选模型、身份卡片、冲突 diff、设备选择、token 持久化 | 维持 bot view 与 profile resource 的区别 |
+| `test/*.test.mjs` | 纯逻辑、HTTP、安全、备份/恢复、设备/适配器、a11y 和身份回归 | 写入使用 fake gateway，不动线上配置 |
 | `start-console.cmd` | 只读启动并打开浏览器 | 普通检查优先使用 |
 | `start-console-edit.cmd` | 显式启用保存并打开浏览器 | 保存仍需预览与用户确认 |
-| `state/` | 备份、审计、当前服务与启动日志 | 含敏感数据，不能分享或提交 |
+| 状态目录（默认 `%LOCALAPPDATA%\AstrBotModelConsole\state`） | 备份、审计、诊断、设备、密钥、锁 | 含敏感数据，不能分享或提交 |
 
 `.gitignore` 排除 state/、node_modules/ 和 *.log。它不是文件访问保护；仍不能把项目根目录直接映射为静态目录。
 
@@ -187,11 +191,18 @@ AstrBot 没有原子 CAS。最后一次版本检查与 PUT 之间仍有外部客
 
 | 方法/路径 | 作用 |
 |---|---|
-| GET `/health` | 本工具存活，不表示 AstrBot/QQ 在线 |
-| GET `/snapshot` | 白名单模型、revision、绑定、身份和覆盖缺口 |
+| GET `/health` | `{status,version,dataPath,stateDir,readOnly,startedAt}`；不表示 AstrBot/QQ 在线 |
+| GET `/snapshot[?device=]` | 白名单模型、revision、绑定、身份、routing、device；远程设备只读 |
 | GET `/capabilities?provider_id=...` | `{levels,verified}`，未知不编造档位 |
 | POST `/plans` | `{resource,changes,expectedRevision}`，产生计划不等于应用 |
 | POST `/apply` | `{id}`，只在启动显式允许写入时执行 |
+| GET `/backups` | 备份列表 + `stats{count,bytes}` + `limits{keep,maxBytes}` |
+| POST `/backups/prune` | `{keep}`，清理旧备份（保留最新，不需 `--enable-writes`） |
+| GET `/backups/:id/diff?kind=&id=` | 恢复前已审查字段差异（只读，不建计划） |
+| POST `/restore-plans` | `{backupId,resource,expectedRevision}` → 恢复计划（整对象回写） |
+| GET `/devices` / POST `/devices` / DELETE `/devices/:id` | 远程设备注册表；响应不含 apiKey |
+| GET `/devices/:id/health` | 远程可达性与延迟 |
+| GET `/diagnostics/export` | 诊断事件导出（脱敏） |
 
 POST 为 application/json，上限 64 KiB。示例仅表示请求结构：
 
@@ -227,7 +238,9 @@ AstrBot 返回体由 gateway 去掉data外层，并适配 provider/config/info_l
 
 审计为状态目录下的 `audit.jsonl`（默认 `%LOCALAPPDATA%\AstrBotModelConsole\state\audit.jsonl`），包含 apply-start/applied/apply-failed、资源、时间和备份路径；不保存完整配置或凭证。applied表示当时回读成功，不能替代对当前值的复核。不同快照之间不是跨文件原子备份，外部并发写入仍需注意。
 
-没有一键回滚。配置恢复应先查看备份和当前值，重新创建可审核计划。索引、数据库或全局灾难恢复要单独规划，不能把旧SQLite文件直接覆盖运行中库。插件自己的数据库（例如self_learning messages.db）、图片和向量索引不在本工具备份范围内；普通绑定修改不代表已备份所有插件数据。
+每份备份都有 `manifest.json`；`GET /backups` 返回列表/占用，`POST /backups/prune` 清理。恢复入口：`GET /backups/:id/diff` 看已审查字段差异 → `POST /restore-plans` 生成计划 → 预览 → `/apply`。**恢复是整对象回写**（备份中的配置整体覆盖目标资源），只有列出的已审查字段差异经过校验；apply 仍做 revision 双检、写前备份和读回验证。
+
+没有自动回滚；恢复前先看差异。索引、数据库或全局灾难恢复要单独规划，不能把旧 SQLite 文件直接覆盖运行中库。插件自己的数据库（例如 self_learning messages.db）、图片和向量索引不在本工具备份范围内；普通绑定修改不代表已备份所有插件数据。
 
 ## 10. 启动与部署
 
@@ -254,6 +267,7 @@ node --test --test-isolation=none   # 受限沙箱里 node --test 会因 spawn E
 | MODEL_CONSOLE_PORT | 默认0，操作系统分配随机回环端口 |
 | MODEL_CONSOLE_SESSION_TOKEN | 可选、64位小写hex；仅受控重启保留现有工具会话使用，普通启动不设置 |
 | MODEL_CONSOLE_BACKUP_KEEP | 备份保留份数，默认10；只清理含 manifest.json 的 UUID 目录，绝不动最新一份 |
+| MODEL_CONSOLE_BACKUP_MAX_MB | 备份总大小上限（MB），默认 2048；超限删最旧，告警写诊断 |
 | `--enable-writes` | 显式允许应用，不会自动保存 |
 | `--open` | Windows打开带本次工具令牌的浏览器地址 |
 
@@ -279,21 +293,21 @@ node --test --test-isolation=none   # 受限沙箱里 node --test 会因 spawn E
 
 ## 12. 测试与证据分级
 
-接手运行 `node --test --test-isolation=none`（受限沙箱里 `node --test` 会因 spawn EPERM 失败；正常环境可省略参数）。2026-10-29 P0 修复 + 独立审计 + a11y 断言后的基线是 **92 项**，需以当次实际结果为准。
+接手运行 `node --test --test-isolation=none`（受限沙箱里 `node --test` 会因 spawn EPERM 失败；正常环境可省略参数）。2026-10-29 Sprint A/B/C + 审计后基线是 **192 项**（以当次结果为准）。
 
 | 测试文件 | 重点 |
 |---|---|
-| backup.test.mjs | 真实node SQLite fixture备份、配置与profile保留、保留份数清理 |
-| engine.test.mjs | 配置保留、版本冲突、禁写、能力、推理级别、写后不确定状态、空值索引拦截、backupId 脱路径 |
-| server-ui.test.mjs | 静态白名单、鉴权、CSP、请求体、能力API、expectedRevision、409 details 白名单、start 集成 |
-| ui.test.mjs | 草稿、按资源分组、候选过滤、计数和revision、token 纯函数与 sessionStorage 约束 |
-| config.test.mjs | state 目录优先级、ASTRBOT_DATA 发现与多实例报错、旧 state 提示 |
-| lock.test.mjs | 单实例互斥、存活 pid 拒绝、stale 锁清理、release 只删自己的锁 |
-| a11y.test.mjs | 字号下限、关键 token 对比度、导航可访问名、skip link、CSP 静态约束 |
-| identity.test.mjs | 不根据profile/文件名推断身份；default与实例白名单 |
-| navigation.test.mjs | 导航点击/hash与唯一选中态 |
-| profile-views.test.mjs | default bot独立卡片；共享default单个保存目标 |
-| p0-integration.test.mjs | P0 修复的跨模块集成回归（见 docs/P0-AUDIT-2026-10-29.md） |
+| backup.test.mjs | SQLite 备份、保留份数、总大小上限、onWarning、备份列表/读取 |
+| engine.test.mjs | 冲突、禁写、能力、空值索引拦截、backupId 脱路径、field-missing、恢复计划、routing |
+| server-ui.test.mjs | 静态白名单、鉴权、CSP、409 details、/health、/backups、/restore-plans、诊断接线 |
+| server-devices.test.mjs | /devices CRUD、去密钥、health、远程快照缓存隔离、错误映射 |
+| gateway.test.mjs | 端口/配置缓存、并发去重、routingSummary |
+| diagnostics.test.mjs | 白名单、脱敏、滚动、并发有序 |
+| devices.test.mjs / http-adapter.test.mjs | 设备注册表密钥分离、OpenAPI Key 适配器与错误码 |
+| ui.test.mjs | 草稿、分组、冲突 diff、token、设备选择器/恢复契约 |
+| a11y.test.mjs | 字号、对比度、可访问名、skip link、设备表单 |
+| config.test.mjs / lock.test.mjs | state 优先级、数据发现、单实例锁 |
+| p0-integration.test.mjs / sprint-integration.test.mjs | P0 与 Sprint 的跨模块集成回归 |
 
 现有自动测试不是真实浏览器视觉或端到端点击测试。当前工具环境无浏览器自动化入口时必须说明，不能把DOM逻辑测试说成屏幕验收。
 
@@ -320,15 +334,17 @@ node --test --test-isolation=none   # 受限沙箱里 node --test 会因 spawn E
 
 ## 14. 待改进项与当前缺口
 
-1. 完整的会话级/通配符路由解析，或直接使用AstrBot提供的最终配置解析能力；目前仅平台级视图。
+1. 完整的会话级/通配符路由解析；目前仅平台级视图，UI 在 `granular>0` 时提示。
 2. 插件schema/API驱动发现与适配器，覆盖数组、隐藏默认值与动态调用；未审查字段始终只读。
-3. ~~向量/重排模型独立迁移流程。当前engine的迁移拦截位于非空value分支，未来应补齐“清空值”也不能绕过迁移限制的服务端校验。~~ **2026-10-29 P0 已修**：空值同样抛 `INDEX_MIGRATION_REQUIRES_SEPARATE_WORKFLOW`；独立迁移流程本身仍未实现。
-4. 按字段/资源可审查恢复，仍需防止覆盖备份之后其他人的修改；不能用自动覆盖旧全局配置实现回滚。
+3. ~~向量/重排模型独立迁移流程。~~ **2026-10-29 P0 已修**：空值同样抛 `INDEX_MIGRATION_REQUIRES_SEPARATE_WORKFLOW`；独立迁移流程本身仍未实现。
+4. **恢复已做**（备份列表/diff/恢复计划，整对象回写）；仍需防止覆盖备份之后其他人的修改——当前靠 revision 双检缩小窗口，不是原子事务。
 5. 受控日志/运行时验证器，明确“已热加载”与“已调用”证据，而不是仅改成功提示。
-6. ~~控制台单实例管理和启动器改进，避免重复启动、状态索引过期与令牌重开不便。~~ **2026-10-29 P0 已部分修**：单实例锁与令牌刷新存活已完成；`active-service.json` 索引过期、启动器仍待改进。
-7. 更完整的错误诊断与只读操作日志，注意脱敏、限频和空间上限。
-8. 有上限的资源并发读取和身份元数据缓存；仍保留并发请求合并与隐藏标签降频。
-9. UI端到端、键盘和响应式视觉验收，防止真实bot卡片与配置档案再次混淆。
+6. ~~控制台单实例管理和启动器改进。~~ **P0 已部分修**：单实例锁与令牌刷新存活已完成；`active-service.json` 索引过期、启动器仍待改进。
+7. ~~更完整的错误诊断与只读操作日志。~~ **Sprint A 已做**：`diagnostics.jsonl` 脱敏滚动；未做限流与只读操作全量审计。
+8. ~~有上限的资源并发读取和身份元数据缓存。~~ **Sprint A 已做**：gateway 缓存 + 并发去重；身份元数据仍是顺序读取。
+9. UI 端到端、键盘和响应式视觉验收仍未做；当前只有静态 a11y + DOM 契约测试。
+10. 远程设备目前只读：`/plans`、`/apply` 未按 device 路由；SSH 隧道/Agent 未实现（Epic-1 写侧、Epic-2）。
+11. 打包：便携包与 zip 已可构建；Inno 安装器未在本机编译验证，自动更新未做（Epic-3）。
 
 ## 15. 修改后的交付要求
 
@@ -345,5 +361,6 @@ node --test --test-isolation=none   # 受限沙箱里 node --test 会因 spawn E
 - `2026-10-29-default机器人卡片纠正.md`
 - `2026-10-29-模型控制台评审与多设备设计.md`
 - `2026-10-29-模型控制台P0修复.md`
+- `2026-10-29-模型控制台SprintABC.md`
 
 历史记录是证据线索，不是当前状态真源。遇到与本文或源码不一致的旧结论，以现场接口和源码核实后更新文档。

@@ -59,6 +59,15 @@
 - 首启向导：仅当 `/health` 成功且本地无 `localStorage/sessionStorage` 的向导完成标记时显示；可跳过；不阻塞只读使用。
 - 恢复入口：备份列表 → 选资源 → 看 diff → 生成计划 → 现有预览/确认/应用流程。
 
+## 5.1 设备（Epic-1 读侧）
+
+- `GET /devices` → `{devices:[{id:'local',name:'本机',kind:'local',readOnly:boolean,hasSecret:false}, {id,name,kind:'http',baseUrl,readOnly,hasSecret:true}]}`；任何响应/日志都不含 apiKey。
+- `POST /devices` body `{name,baseUrl,apiKey,readOnly?}` → `{device:{...}}`；`DEVICE_INVALID`/`DEVICE_SECRET_REQUIRED` → 400，`DEVICE_EXISTS` → 409。
+- `DELETE /devices/:id` → `{removed:true}`；未知 id → 404 `DEVICE_NOT_FOUND`。
+- `GET /devices/:id/health` → `{reachable,latencyMs?,error?}`；local 恒 `{reachable:true}`。
+- `GET /snapshot?device=<id>`：无参数/local 返回本机快照；http 设备返回远程快照，并带 `device:{id,name,kind}`；远程快照只读、按设备缓存 5 秒；`DEVICE_UNREACHABLE`/`DEVICE_AUTH_FAILED`/`DEVICE_FORBIDDEN` → 409（details 白名单）。
+- 前端：设备选择器选择状态存 `sessionStorage['model-console.device']`；远程只读时禁用编辑；快照缺 `device` 字段按本机处理。
+
 ## 6. 文件写作用域（防冲突）
 
 | Worker | 独占文件 |

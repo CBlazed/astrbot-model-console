@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Show runtime
+        run: |
+          node --version
+          npm --version
+      - name: Run tests (no child-process isolation; sandbox friendly)
+        run: node --test --test-isolation=none
+      - name: Syntax check entry modules
+        run: |
+          node --check src/server.mjs
+          node --check src/engine.mjs
+          node --check public/app.mjs

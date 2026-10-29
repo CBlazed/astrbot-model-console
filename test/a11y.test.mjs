@@ -119,3 +119,24 @@ test('页面不包含内联脚本或内联事件处理器（CSP）', () => {
   for (const [, attrs] of scripts) assert.match(attrs, /\bsrc\s*=/i, 'script 必须使用 src 外链');
   assert.equal(/\bon[a-z]+\s*=/i.test(html), false, '发现内联事件属性（如 onclick）');
 });
+
+test('向导、冲突、备份与恢复控件都有可访问名或说明', () => {
+  assert.match(html, /<section\b[^>]*id="wizard"[^>]*aria-label="首启向导"/, '向导区域缺少 aria-label');
+  assert.match(html, /<section\b[^>]*id="conflict"[^>]*aria-label="配置冲突"/, '冲突区域缺少 aria-label');
+  assert.match(html, /id="backup-keep"[^>]*aria-label="保留份数"/, '保留份数输入缺少 aria-label');
+  assert.match(html, /id="restore-kind"[^>]*aria-label=/, '恢复资源类型缺少 aria-label');
+  assert.match(html, /id="restore-resource"[^>]*aria-label=/, '恢复资源缺少 aria-label');
+  assert.match(html, /id="routing-notice"[^>]*role="status"/, '路由提示缺少 role="status"');
+  assert.match(html, /<caption class="sr-only">/, '数据表缺少说明 caption');
+});
+
+test('设备选择器与远程设备管理控件都有可访问名', () => {
+  assert.match(html, /<select\b[^>]*id="device-select"[^>]*aria-label="选择设备"/, '设备选择器缺少 aria-label');
+  assert.match(html, /<select\b[^>]*id="device-select"[^>]*>/, '设备选择器应为原生 select');
+  assert.match(html, /id="device-name"[^>]*aria-label="设备名称"/, '设备名称输入缺少 aria-label');
+  assert.match(html, /id="device-url"[^>]*aria-label="设备地址 baseUrl"/, '设备地址输入缺少 aria-label');
+  assert.match(html, /id="device-key"[^>]*type="password"[^>]*aria-label="设备 OpenAPI Key"/, 'OpenAPI Key 必须是 password 且有 aria-label');
+  assert.match(html, /id="device-key"[^>]*autocomplete="new-password"/, '凭据输入应阻止浏览器回显');
+  assert.match(html, /id="remote-notice"[^>]*role="status"/, '远程只读提示缺少 role="status"');
+  assert.match(html, /id="device-body"[^>]*>/, '设备表应有 tbody');
+});
