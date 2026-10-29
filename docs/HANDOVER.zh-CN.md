@@ -303,6 +303,8 @@ node scripts/build-package.mjs [--zip]
 
 接手运行 `node --test --test-isolation=none`（受限沙箱里 `node --test` 会因 spawn EPERM 失败；正常环境可省略参数）。2026-10-29 最终基线是 **290 项（当前环境 290 pass / 0 fail；受限沙箱会 skip 2 项 DPAPI 测试）**（以当次结果为准）。
 
+2026-10-29 追加：真实 AstrBot 写入已验证（运行中的实例、未使用配置档案的 compression 绑定：plan → apply → snapshot/API/磁盘三方读回 → 恢复 → 再读回，恢复后 revision 与写前一致）。`generationVerified` / `hotLoadVerified` 仍为 false：保存+回读不等于热加载或模型生成验证。证据见上级 `docs/history/2026-10-29-真实AstrBot写入验证.md`。
+
 | 测试文件 | 重点 |
 |---|---|
 | backup.test.mjs | SQLite 备份、保留份数、总大小上限、onWarning、备份列表/读取 |
