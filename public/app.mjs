@@ -1,13 +1,13 @@
 /** Browser controller: tab-scoped session token (sessionStorage), safe DOM, deliberate plan/review/apply. */
-import {resourceKey,draftKey,stage,groups,currentRevision,candidates,indexCapability,isIssue,counts,profileViews,parseTokenHash,loadToken,saveToken,clearToken,bindingStatus,buildConflictRows,routingNoticeText,loadDevice,saveDevice,snapshotPath,deviceApiPath,snapshotWritable,snapshotMode,isRemoteSnapshot,deviceOptions,healthBadge,deviceErrorText,deviceKind,deviceKindLabel,validateDeviceInput,backupWarnings,configVersionText,hotLoadMessage,planWarning} from './ui-state.mjs';
+import {resourceKey,draftKey,stage,groups,currentRevision,candidates,indexCapability,isIssue,counts,profileViews,parseTokenHash,loadToken,saveToken,clearToken,bindingStatus,buildConflictRows,routingNoticeText,loadDevice,saveDevice,snapshotPath,deviceApiPath,snapshotWritable,snapshotMode,isRemoteSnapshot,deviceOptions,healthBadge,deviceErrorText,deviceKind,deviceKindLabel,validateDeviceInput,backupWarnings,configVersionText,hotLoadMessage,planWarning,webSearchStatus,webSearchValueText,isSecretPath,secretDraftText,webSearchProviderLabels} from './ui-state.mjs';
 const $=id=>document.getElementById(id);
 /** sessionStorage survives reload but not a closed tab; access itself may throw when storage is disabled. */
 const tokenStorage=(()=>{try{return sessionStorage;}catch{return undefined;}})();
 const el=(tag,text,className)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;};
 const names={default:'全局默认配置',astrbot_plugin_group_chat_plus:'群聊增强',astrbot_plugin_livingmemory:'LivingMemory · 长期记忆',astrbot_plugin_self_learning:'自学习',meme_manager:'表情管理',astrbot_plugin_anysearch:'联网搜索',astrbot_plugin_parser:'链接解析'};
-const labels={'agent_runner.config.model.provider_id':'主对话模型','agent_runner.config.compression.provider_id':'上下文压缩','provider_settings.default_image_caption_provider_id':'默认图片描述','provider_stt_settings.provider_id':'语音识别','provider_tts_settings.provider_id':'语音合成','provider_ltm_settings.image_caption_provider_id':'记忆图片描述',decision_ai_provider_id:'读空气决策',image_to_text_provider_id:'群图片识别',private_image_to_text_provider_id:'私聊图片识别','provider_settings.embedding_provider_id':'记忆向量','provider_settings.llm_provider_id':'总结与抽取','recall_engine.rerank_provider_id':'记忆重排序','Model_Configuration.filter_provider_id':'学习过滤','Model_Configuration.refine_provider_id':'学习精炼','Model_Configuration.reinforce_provider_id':'学习强化','V2_Architecture_Settings.embedding_provider_id':'学习向量','V2_Architecture_Settings.rerank_provider_id':'学习重排序','semantic.vision_provider_id':'语义图片描述','semantic.embedding_provider_id':'表情向量','auto_collect.vision_provider_id':'自动收集识图','generation.emotion.llm.provider_id':'情绪生成','custom_extra_body.reasoning_effort':'推理强度'};
+const labels={'agent_runner.config.model.provider_id':'主对话模型','agent_runner.config.compression.provider_id':'上下文压缩','provider_settings.default_image_caption_provider_id':'默认图片描述','provider_stt_settings.provider_id':'语音识别','provider_tts_settings.provider_id':'语音合成','provider_ltm_settings.image_caption_provider_id':'记忆图片描述',decision_ai_provider_id:'读空气决策',image_to_text_provider_id:'群图片识别',private_image_to_text_provider_id:'私聊图片识别','provider_settings.embedding_provider_id':'记忆向量','provider_settings.llm_provider_id':'总结与抽取','recall_engine.rerank_provider_id':'记忆重排序','Model_Configuration.filter_provider_id':'学习过滤','Model_Configuration.refine_provider_id':'学习精炼','Model_Configuration.reinforce_provider_id':'学习强化','V2_Architecture_Settings.embedding_provider_id':'学习向量','V2_Architecture_Settings.rerank_provider_id':'学习重排序','semantic.vision_provider_id':'语义图片描述','semantic.embedding_provider_id':'表情向量','auto_collect.vision_provider_id':'自动收集识图','generation.emotion.llm.provider_id':'情绪生成','custom_extra_body.reasoning_effort':'推理强度','provider_settings.web_search':'启用网页搜索','provider_settings.websearch_provider':'网页搜索提供商','provider_settings.websearch_native_provider_id':'搜索使用模型','provider_settings.websearch_tavily_key':'Tavily API Key','provider_settings.websearch_bocha_key':'Bocha API Key','provider_settings.websearch_brave_key':'Brave API Key','provider_settings.websearch_firecrawl_key':'Firecrawl API Key','provider_settings.websearch_exa_key':'Exa API Key','provider_settings.websearch_anysearch_key':'AnySearch API Key','provider_settings.websearch_deepseek_key':'DeepSeek Search API Key','provider_settings.websearch_serpapi_key':'SerpApi API Key','provider_settings.websearch_baidu_app_builder_key':'Baidu AI Search API Key'};
 const capabilities={llm:'文字',vision:'视觉',embedding:'向量',rerank:'重排序',stt:'语音识别',tts:'语音合成'};
-const errors={ACCESS_DENIED:'连接被拒绝，请检查本次会话令牌。',ASTRBOT_UNREACHABLE:'AstrBot 暂时无法连接，已保留草稿，请确认实例仍在运行。',CONCURRENT_CHANGE:'配置已被其他面板修改，请核对最新配置并重新编辑。',READ_ONLY:'当前服务为只读模式；重新以写入模式启动后才能保存。',MODEL_MISSING_OR_DISABLED:'目标模型不存在或已禁用，请重新选择。',CAPABILITY_UNVERIFIED_OR_MISMATCH:'目标模型能力尚未核实或不符合该任务。',EFFORT_UNVERIFIED_OR_UNSUPPORTED:'该模型不支持此推理强度，或能力暂时无法核实。',PLAN_EXPIRED:'预览已过期，请重新预览。',VERIFY_FAILED:'保存后的回读与预期不一致，请核对配置和备份，勿直接重试。'};
+const errors={ACCESS_DENIED:'连接被拒绝，请检查本次会话令牌。',ASTRBOT_UNREACHABLE:'AstrBot 暂时无法连接，已保留草稿，请确认实例仍在运行。',CONCURRENT_CHANGE:'配置已被其他面板修改，请核对最新配置并重新编辑。',READ_ONLY:'当前服务为只读模式；重新以写入模式启动后才能保存。',MODEL_MISSING_OR_DISABLED:'目标模型不存在或已禁用，请重新选择。',CAPABILITY_UNVERIFIED_OR_MISMATCH:'目标模型能力尚未核实或不符合该任务。',EFFORT_UNVERIFIED_OR_UNSUPPORTED:'该模型不支持此推理强度，或能力暂时无法核实。',PLAN_EXPIRED:'预览已过期，请重新预览。',VALUE_NOT_ALLOWED:'网页搜索设置值不在允许范围内，请重新选择。',NATIVE_SEARCH_PLUGIN_UNAVAILABLE:'模型原生搜索插件未安装或未启用，无法选择“跟随当前聊天模型”。',SECRET_VALUE_INVALID:'API Key 格式不合法：数量需在 1-20 个、每个 1-4096 字符。',VERIFY_FAILED:'保存后的回读与预期不一致，请核对配置和备份，勿直接重试。'};
 let token='',snapshot=null,drafts=new Map(),plans=[],preparedDrafts=[],busy=false,inFlight=false,search='',onlyIssues=false;
 let conflictResource=null,healthInfo=null,healthLoading=false,healthTried=false,wizardStep=1,backups=null,backupLoading=false,backupTried=false,selectedBackup=null,restoreDiff=null;
 let selectedDevice=loadDevice(tokenStorage),devices=null,devicesLoading=false,devicesTried=false;
@@ -29,9 +29,9 @@ function currentValuesFor(latest,resource){
  if(!latest||!resource)return [];
  if(resource.kind==='provider'){const model=(latest.models??[]).find(m=>m.id===resource.id);return [{path:'custom_extra_body.reasoning_effort',value:model?.effort??''}];}
  const item=(latest.resources??[]).find(r=>resourceKey(r.resource)===resourceKey(resource));
- return (item?.bindings??[]).map(b=>({path:b.path,value:b.value??''}));
+ return (item?.bindings??[]).map(b=>b.secret?{path:b.path,value:b.configured?`已配置 ${b.count} 个 Key`:'未配置'}:{path:b.path,value:b.value??''});
 }
-function pendingChanges(resource){return [...drafts.values()].filter(d=>!resource||resourceKey(d.resource)===resourceKey(resource)).map(d=>({path:d.path,value:d.value}));}
+function pendingChanges(resource){return [...drafts.values()].filter(d=>!resource||resourceKey(d.resource)===resourceKey(resource)).map(d=>isSecretPath(d.path)?{path:d.path,value:secretDraftText(d.path,d.value)}:{path:d.path,value:d.value});}
 function showConflict(resource,latest){conflictResource=resource??null;const rows=buildConflictRows(pendingChanges(conflictResource),currentValuesFor(latest,conflictResource),labels);$('conflict').hidden=false;$('conflict-summary').textContent=conflictResource?`资源：${resourceName(conflictResource)} · 请核对下列差异后重新编辑；其他资源的草稿不会被丢弃。`:'读取最新配置时发现版本已变化。刷新后可加载服务器最新值。';const body=$('conflict-body');if(rows.length)body.replaceChildren(...rows.map(row=>{const tr=el('tr');tr.append(el('td',row.label),el('td',row.mine),el('td',row.server));return tr;}));else{const tr=el('tr'),cell=el('td','没有可展示的本地差异。','empty-note');cell.colSpan=3;tr.append(cell);body.replaceChildren(tr);}}
 function hideConflict(){$('conflict').hidden=true;conflictResource=null;}
 function rebaseConflict(){const resource=conflictResource;if(resource)for(const [key,draft] of [...drafts])if(resourceKey(draft.resource)===resourceKey(resource))drafts.delete(key);invalidatePlans();hideConflict();renderDrafts();message(resource?'已丢弃该资源的旧草稿并重新读取最新配置；其他资源的草稿保留。':'已重新读取最新配置。');refresh({manual:true,forceRender:true});}
@@ -72,14 +72,147 @@ function renderBinding(resource,binding,revision){const tr=el('tr'),purpose=el('
  const draft=drafts.get(draftKey(resource,binding.path)),value=draft?.value??binding.value,blank=binding.inherit==='session'?'跟随当前会话模型':'空值 · 继承语义待核实';select.append(new Option(blank,''));for(const model of candidates(snapshot.models,binding.capability))select.append(new Option(model.id,model.id));if(value&&!Array.from(select.options).some(o=>o.value===value)){const old=new Option(`${value}（不可用）`,value);old.disabled=true;select.append(old);}select.value=value;
  select.disabled=busy||readOnlyView()||indexCapability(binding.capability);select.addEventListener('change',()=>{const existing=drafts.get(draftKey(resource,binding.path));drafts=stage(drafts,resource,binding.path,select.value,existing?.baseValue??binding.value,existing?.revision??revision);invalidatePlans();renderDrafts();renderResources();});valueCell.append(select);const note=indexCapability(binding.capability)?'切换需单独迁移索引':binding.effectiveModel?`实际引用：${binding.effectiveModel}`:binding.inherit==='session'?'按会话动态选择，不固定绑定':'空值行为尚未核实';valueCell.append(el('div',note,'row-note'));const state=el('td');const status=bindingStatus(binding.status);state.append(pill(draft?'待应用':status.label,draft?'purple':status.kind));tr.append(purpose,valueCell,state);return tr;
 }
-function renderResources(){for(const [kind,target]of [['profile','core-cards'],['plugin','plugin-cards']]){const container=$(target),cards=[],archives=[];for(const item of (kind==='profile'?profileViews(snapshot.resources):snapshot.resources.filter(r=>r.resource.kind===kind))){const {resource}=item,bindings=item.bindings??[];if(!matches(resource,bindings)&&!(item.viewName??'').toLowerCase().includes(search.toLowerCase()))continue;if(onlyIssues&&item.status!=='unavailable'&&!bindings.some(isIssue))continue;const card=el('details',undefined,'card'),key=item.viewKey??resourceKey(resource);card.open=opened.has(key);card.addEventListener('toggle',()=>card.open?opened.add(key):opened.delete(key));const summary=el('summary'),title=el('div',undefined,'card-title');title.append(el('h3',item.viewName??resourceName(resource)),el('small',item.viewSubtitle??resourceSubtitle(resource)));const issueCount=bindings.filter(isIssue).length;summary.append(el('span',kind==='profile'?'A':'P','card-symbol'),title,pill(item.status==='unavailable'?'读取失败':issueCount?`${issueCount} 项异常`:`${bindings.length} 项绑定`,item.status==='unavailable'||issueCount?'bad':''),el('span','⌄','chevron'));card.append(summary);
- if(item.status==='unavailable')card.append(el('div','该资源暂时无法读取，请检查实例或插件状态。','empty-note'));else if(!bindings.length)card.append(el('div','当前配置中未发现已登记的模型绑定。此状态不代表插件没有任何模型调用。','empty-note'));else{const table=el('table',undefined,'binding-table'),thead=el('thead'),head=el('tr');for(const name of ['任务用途','使用模型','配置状态'])head.append(el('th',name));thead.append(head);const tbody=el('tbody');for(const b of bindings)tbody.append(renderBinding(resource,b,item.revision));table.append(thead,tbody);card.append(table);}if(item.unreviewed?.length)card.append(el('div',`另有 ${item.unreviewed.length} 个待审查字段；未核实前不开放修改。`,'empty-note'));if(item.viewGroup==='unassigned')archives.push(card);else cards.push(card);}if(archives.length){const archive=el('details',undefined,'card');const summary=el('summary','未使用的配置档案（'+archives.length+'）');archive.append(summary,...archives);cards.push(archive);}container.replaceChildren(...cards);if(!cards.length)container.append(el('div',snapshot.resources.length?'没有符合筛选条件的配置。':'等待配置读取…','empty-note'));}}
+
+function settingDraftText(d,value){if(isSecretPath(d.path))return secretDraftText(d.path,value);return d.path.startsWith('provider_settings.web')?webSearchValueText(d.path,value):(value||'空值 / 跟随默认');}
+function renderSetting(resource,binding,revision,settings){
+ const row=el('div',undefined,'setting-row'),label=el('div',undefined,'setting-label');
+ const note=binding.type==='bool'?'关闭后模型不再拥有网页搜索工具，已选择的提供商会保留。':binding.type==='model'?'留空表示跟随当前聊天模型；选择后搜索会固定使用该模型。':'选择“跟随当前聊天模型”时使用模型原生搜索；否则使用 AstrBot 内置搜索 API。';
+ label.append(el('strong',labels[binding.path]??binding.path),el('small',note));
+ row.append(label);
+ const draft=drafts.get(draftKey(resource,binding.path)),readOnly=busy||readOnlyView();
+ if(binding.type==='bool'){
+  const wrap=el('label',undefined,'switch'),box=document.createElement('input');
+  box.type='checkbox';box.checked=(draft?.value??binding.value)==='true';box.disabled=readOnly;
+  box.setAttribute('aria-label',resourceName(resource)+' · '+(labels[binding.path]??binding.path));
+  const text=el('span',box.checked?'已启用':'已关闭');
+  box.addEventListener('change',()=>{drafts=stage(drafts,resource,binding.path,box.checked?'true':'false',binding.value,revision);invalidatePlans();renderDrafts();renderResources();});
+  wrap.append(box,text);row.append(wrap);
+ }else{
+  const select=el('select',undefined,'setting-select');
+  select.setAttribute('aria-label',resourceName(resource)+' · '+(labels[binding.path]??binding.path));
+  if(binding.type==='model')select.append(new Option('跟随当前聊天模型（默认）',''));
+  for(const option of binding.options??[]){const node=new Option(option.label,option.value);node.disabled=Boolean(option.disabled);select.append(node);}
+  const value=draft?.value??binding.value;
+  if(value&&!Array.from(select.options).some(option=>option.value===value)){const old=new Option(webSearchValueText(binding.path,value)+'（不可用）',value);old.disabled=true;select.append(old);}
+  select.value=value??'';select.disabled=readOnly;
+  select.addEventListener('change',()=>{drafts=stage(drafts,resource,binding.path,select.value,binding.value,revision);invalidatePlans();renderDrafts();renderResources();});
+  row.append(select);
+ }
+ return row;
+}
+const providerKeyDocs={deepseek:'https://api-docs.deepseek.com/zh-cn/guides/search/'};
+function renderSecretKey(resource,binding,revision){
+ const row=el('div',undefined,'setting-row secret-row'),label=el('div',undefined,'setting-label');
+ const providerLabel=webSearchProviderLabels[binding.provider]??binding.provider;
+ label.append(el('strong',labels[binding.path]??providerLabel+' API Key'),el('small',binding.configured?`已配置 ${binding.count} 个 Key（不回显）；重新填写并确认会整体替换。`:'未配置 Key；不配置将无法使用该提供商。'));
+ if(providerKeyDocs[binding.provider]){
+  const link=document.createElement('a');link.href=providerKeyDocs[binding.provider];link.target='_blank';link.rel='noopener noreferrer';link.textContent='DeepSeek 搜索 API 文档';link.className='doc-link';
+  label.append(link);
+ }
+ row.append(label);
+ const controls=el('div',undefined,'secret-controls'),readOnly=busy||readOnlyView();
+ const clearLabel=el('label',undefined,'secret-clear'),clear=document.createElement('input');
+ clear.type='checkbox';clear.disabled=readOnly;clearLabel.append(clear,el('span','清空现有 Key'));
+ let input;
+ if(binding.type==='secret-string'){
+  input=document.createElement('input');input.type='password';input.autocomplete='new-password';input.placeholder='粘贴 Key（留空保持不变）';
+ }else{
+  input=document.createElement('textarea');input.rows=2;input.placeholder='每行一个 Key（留空保持不变）';
+ }
+ input.className='secret-input';input.disabled=readOnly;input.setAttribute('aria-label',resourceName(resource)+' · '+(labels[binding.path]??providerLabel+' API Key'));
+ const summary=el('div',undefined,'row-note');
+ const draftText=()=>{const value=drafts.get(draftKey(resource,binding.path))?.value;if(value===undefined)return binding.configured?`当前已保存 ${binding.count} 个 Key`:'当前未保存 Key';return '待应用：'+secretDraftText(binding.path,value);};
+ summary.textContent=draftText();
+ const actions=el('div',undefined,'secret-actions');
+ const confirm=el('button','确认添加/替换','button primary');confirm.type='button';
+ const test=el('button','测试 Key','button');test.type='button';
+ const result=el('div',undefined,'row-note');
+ const refreshButtons=()=>{const blocked=readOnly||clear.checked===false&&!input.value.trim();confirm.disabled=blocked;input.disabled=readOnly||clear.checked;};
+ refreshButtons();
+ input.addEventListener('input',refreshButtons);
+ clear.addEventListener('change',refreshButtons);
+ confirm.addEventListener('click',()=>{
+  const text=input.value.trim();
+  if(clear.checked){
+   drafts=stage(drafts,resource,binding.path,binding.type==='secret-list'?'[]':'',undefined,revision);
+  }else if(!text){
+   return;
+  }else if(binding.type==='secret-list'){
+   const keys=text.split(/[\n,]+/).map(item=>item.trim()).filter(Boolean);
+   if(!keys.length||keys.length>20||keys.some(key=>key.length>4096)){result.textContent='Key 不合法：需要 1-20 个，每个不超过 4096 字符。';result.className='row-note test-bad';return;}
+   drafts=stage(drafts,resource,binding.path,JSON.stringify(keys),undefined,revision);
+  }else{
+   if(text.length>4096){result.textContent='Key 过长（最多 4096 字符）。';result.className='row-note test-bad';return;}
+   drafts=stage(drafts,resource,binding.path,text,undefined,revision);
+  }
+  input.value='';clear.checked=false;invalidatePlans();renderDrafts();refreshButtons();
+  summary.textContent=draftText();result.textContent='已加入待应用变更，预览后保存。';result.className='row-note test-ok';
+ });
+ test.addEventListener('click',async()=>{
+  test.disabled=true;result.textContent='正在测试…';result.className='row-note';
+  try{
+   const payload={provider:binding.provider,profileId:resource.id,key:input.value.trim()};
+   const data=await api(deviceApiPath('/search-key-test',selectedDevice),payload);
+   result.textContent=(data.ok?'✅ ':'❌ ')+(data.message??'')+(data.latencyMs?`（${data.latencyMs}ms）`:'');
+   result.className='row-note '+(data.ok?'test-ok':'test-bad');
+  }catch(error){result.textContent='测试失败：'+errorText(error);result.className='row-note test-bad';}
+  test.disabled=readOnly;
+ });
+ actions.append(confirm,test);
+ controls.append(input,clearLabel,actions,summary,result);
+ row.append(controls);
+ return row;
+}
+function renderNativeTest(resource,modelBinding,revision){
+ const row=el('div',undefined,'setting-row native-test-row'),label=el('div',undefined,'setting-label');
+ label.append(el('strong','测试模型原生搜索'),el('small','会向当前搜索模型发一次真实的 web_search 请求，用于确认真实支持情况；不保存配置。'));
+ row.append(label);
+ const controls=el('div',undefined,'secret-controls'),readOnly=busy||readOnlyView();
+ const button=el('button','测试模型原生搜索','button');button.type='button';button.disabled=readOnly;
+ const result=el('div',undefined,'row-note');
+ button.addEventListener('click',async()=>{
+  button.disabled=true;result.textContent='正在测试…';result.className='row-note';
+  const draft=drafts.get(draftKey(resource,'provider_settings.websearch_native_provider_id'));
+  const providerId=draft?.value??modelBinding?.value??'';
+  try{
+   const data=await api(deviceApiPath('/search-native-test',selectedDevice),{profileId:resource.id,providerId});
+   result.textContent=(data.ok?'✅ ':'❌ ')+(data.message??'')+(data.latencyMs?`（${data.latencyMs}ms，引用 ${data.citations??0} 条）`:'');
+   result.className='row-note '+(data.ok?'test-ok':'test-bad');
+  }catch(error){result.textContent='测试失败：'+errorText(error);result.className='row-note test-bad';}
+  button.disabled=readOnly;
+ });
+ controls.append(button,result);row.append(controls);
+ return row;
+}
+function renderSettingsBlock(resource,settings,revision){
+ const status=webSearchStatus(settings,snapshot.features),block=el('div',undefined,'settings-block'),head=el('div',undefined,'settings-head'),title=el('div');
+ title.append(el('p','SETTINGS / WEB SEARCH','eyebrow'),el('h3','网页搜索'));
+ head.append(title,pill(status.label,status.kind));block.append(head);
+ const rows=el('div',undefined,'settings-rows');
+ for(const binding of settings.filter(item=>!item.secret&&item.type!=='model'))rows.append(renderSetting(resource,binding,revision,settings));
+ const providerBinding=settings.find(item=>item.path==='provider_settings.websearch_provider');
+ const selectedProvider=drafts.get(draftKey(resource,'provider_settings.websearch_provider'))?.value??providerBinding?.value??'';
+ if(selectedProvider==='model_native'){
+  const modelBinding=settings.find(item=>item.path==='provider_settings.websearch_native_provider_id');
+  if(modelBinding)rows.append(renderSetting(resource,modelBinding,revision,settings));
+  rows.append(renderNativeTest(resource,modelBinding,revision));
+ }else{
+  const keyBinding=settings.find(item=>item.secret&&item.provider===selectedProvider);
+  if(keyBinding)rows.append(renderSecretKey(resource,keyBinding,revision));
+ }
+ block.append(rows,el('p',status.note,'setting-note '+status.noteClass));
+ return block;
+}
+
+function renderResources(){for(const [kind,target]of [['profile','core-cards'],['plugin','plugin-cards']]){const container=$(target),cards=[],archives=[];for(const item of (kind==='profile'?profileViews(snapshot.resources):snapshot.resources.filter(r=>r.resource.kind===kind))){const {resource}=item,allBindings=item.bindings??[],bindings=allBindings.filter(b=>b.capability!=='setting'),settings=allBindings.filter(b=>b.capability==='setting');if(!matches(resource,allBindings)&&!(item.viewName??'').toLowerCase().includes(search.toLowerCase()))continue;if(onlyIssues&&item.status!=='unavailable'&&!allBindings.some(isIssue))continue;const card=el('details',undefined,'card'),key=item.viewKey??resourceKey(resource);card.open=opened.has(key);card.addEventListener('toggle',()=>card.open?opened.add(key):opened.delete(key));const summary=el('summary'),title=el('div',undefined,'card-title');title.append(el('h3',item.viewName??resourceName(resource)),el('small',item.viewSubtitle??resourceSubtitle(resource)));const issueCount=allBindings.filter(isIssue).length;const headPills=[pill(item.status==='unavailable'?'读取失败':issueCount?`${issueCount} 项异常`:`${bindings.length} 项绑定`,item.status==='unavailable'||issueCount?'bad':'')];if(settings.length){const status=webSearchStatus(settings,snapshot.features);headPills.push(pill(status.label,status.kind));}summary.append(el('span',kind==='profile'?'A':'P','card-symbol'),title,...headPills,el('span','⌄','chevron'));card.append(summary);
+ if(item.status==='unavailable')card.append(el('div','该资源暂时无法读取，请检查实例或插件状态。','empty-note'));else{if(bindings.length){const table=el('table',undefined,'binding-table'),thead=el('thead'),head=el('tr');for(const name of ['任务用途','使用模型','配置状态'])head.append(el('th',name));thead.append(head);const tbody=el('tbody');for(const b of bindings)tbody.append(renderBinding(resource,b,item.revision));table.append(thead,tbody);card.append(table);}if(settings.length)card.append(renderSettingsBlock(resource,settings,item.revision));if(!bindings.length&&!settings.length)card.append(el('div','当前配置中未发现已登记的模型绑定。此状态不代表插件没有任何模型调用。','empty-note'));}if(item.unreviewed?.length)card.append(el('div',`另有 ${item.unreviewed.length} 个待审查字段；未核实前不开放修改。`,'empty-note'));if(item.viewGroup==='unassigned')archives.push(card);else cards.push(card);}if(archives.length){const archive=el('details',undefined,'card');const summary=el('summary','未使用的配置档案（'+archives.length+'）');archive.append(summary,...archives);cards.push(archive);}container.replaceChildren(...cards);if(!cards.length)container.append(el('div',snapshot.resources.length?'没有符合筛选条件的配置。':'尚未读取到配置。','empty-note'));}}
+
 function renderModels(){const cards=[];for(const model of snapshot.models){if(search&&!model.id.toLowerCase().includes(search.toLowerCase()))continue;if(onlyIssues&&model.enabled)continue;const card=el('article',undefined,'model-card'),meta=el('div',undefined,'model-meta');meta.append(pill(model.enabled?'已启用':'已禁用',model.enabled?'good':''),el('span',(model.capabilities??[]).map(x=>capabilities[x]??x).join(' / '),'muted'));card.append(meta,el('h3',model.id));const references=snapshot.resources.flatMap(r=>(r.bindings??[]).filter(b=>b.value===model.id).map(b=>`${resourceName(r.resource)} · ${labels[b.path]??b.path}`));card.append(el('p',`${references.length} 处直接引用 · 推理强度 ${model.effort??'未指定'}`,'muted'));const button=el('button','调整推理强度','button');button.disabled=readOnlyView()||!model.enabled||busy||!(model.capabilities??[]).includes('llm');button.addEventListener('click',async()=>{button.disabled=true;try{const capability=await api(`/capabilities?provider_id=${encodeURIComponent(model.id)}`);if(!capability.levels?.length)throw Error('EFFORT_UNVERIFIED_OR_UNSUPPORTED');const select=el('select',undefined,'model-select');select.setAttribute('aria-label',`${model.id} 推理强度`);select.append(new Option('选择推理强度',''));for(const level of capability.levels)select.append(new Option(level,level));const resource=model.resource??{kind:'provider',id:model.id},path='custom_extra_body.reasoning_effort';select.value=drafts.get(draftKey(resource,path))?.value??model.effort??'';select.addEventListener('change',()=>{if(!select.value)return;const previous=drafts.get(draftKey(resource,path));drafts=stage(drafts,resource,path,select.value,previous?.baseValue??model.effort??'',previous?.revision??model.revision);invalidatePlans();renderDrafts();});button.replaceWith(select);card.append(el('div',references.length?`共享影响：${references.join('；')}`:'暂无已登记的直接引用；仍可能被会话继承使用。','row-note'));}catch(e){if(!handleDenied(e))message(errorText(e),true);button.disabled=false;}});card.append(button);cards.push(card);}$('model-cards').replaceChildren(...cards);}
-function renderDrafts(){$('draft-count').textContent=String(drafts.size);const rows=[];for(const [key,d]of drafts){const item=el('div',undefined,'draft-item');item.append(el('strong',resourceName(d.resource)),el('small',labels[d.path]??d.path),el('small',`原值：${d.baseValue||'空值 / 跟随默认'}`),el('small',`→ ${d.value||'空值 / 跟随默认'}`,'to'));const remove=el('button','移除','button quiet');remove.disabled=busy;remove.addEventListener('click',()=>{drafts.delete(key);invalidatePlans();renderDrafts();renderResources();renderModels();});item.append(remove);rows.push(item);}$('drafts').replaceChildren(...rows);if(!rows.length){const empty=el('div',undefined,'empty-drafts');empty.append(el('span','⇄'),document.createTextNode('还没有待应用的修改'),el('div','在卡片中选择模型即可暂存。'));$('drafts').append(empty);}$('prepare').disabled=busy||!drafts.size||readOnlyView();$('clear').disabled=busy||!drafts.size;}
+function renderDrafts(){$('draft-count').textContent=String(drafts.size);const rows=[];for(const [key,d]of drafts){const item=el('div',undefined,'draft-item');item.append(el('strong',resourceName(d.resource)),el('small',labels[d.path]??d.path),el('small',`原值：${settingDraftText(d,d.baseValue)}`),el('small',`→ ${settingDraftText(d,d.value)}`,'to'));const remove=el('button','移除','button quiet');remove.disabled=busy;remove.addEventListener('click',()=>{drafts.delete(key);invalidatePlans();renderDrafts();renderResources();renderModels();});item.append(remove);rows.push(item);}$('drafts').replaceChildren(...rows);if(!rows.length){const empty=el('div',undefined,'empty-drafts');empty.append(el('span','⇄'),document.createTextNode('还没有待应用的修改'),el('div','在卡片中选择模型即可暂存。'));$('drafts').append(empty);}$('prepare').disabled=busy||!drafts.size||readOnlyView();$('clear').disabled=busy||!drafts.size;}
 function invalidatePlans(){plans=[];preparedDrafts=[];$('ack').checked=false;$('apply').disabled=true;}
 function render(){if(!snapshot)return;refreshSummary();renderResources();renderModels();renderDrafts();}
 async function refresh({manual=false,forceRender=false,persist=false}={}){if(!token||inFlight||busy||$('review').open)return;inFlight=true;$('refresh').disabled=true;try{const next=await api(snapshotPath(selectedDevice));const changed=JSON.stringify(next.models)!==JSON.stringify(snapshot?.models)||JSON.stringify(next.resources)!==JSON.stringify(snapshot?.resources);snapshot=next;const resolved=next?.device?.id??'local';if(resolved!==selectedDevice){selectedDevice=resolved;saveDevice(tokenStorage,resolved);}if(persist)saveToken(tokenStorage,token);if(!devicesTried)void loadDevices();if(!healthTried)void loadHealth();if(!backupTried)void loadBackups();if(changed||forceRender||manual){const editing=['SELECT','INPUT'].includes(document.activeElement?.tagName)&&document.activeElement?.id!=='search';if(!editing||manual||forceRender)render();else refreshSummary();}else refreshSummary();if(manual)message('已读取最新配置；未保存的草稿保持不变。');}catch(e){if(handleDenied(e))return;if(e?.message==='CONCURRENT_CHANGE'){showConflict(null,null);message(errors.CONCURRENT_CHANGE,true);return;}$('mode').textContent='连接中断';$('mode').className='pill bad';message(errorText(e),true);}finally{inFlight=false;$('refresh').disabled=false;}}
-function showReview(plansToShow,{restore=false}={}){plans=plansToShow;restore=restore||plans.some(plan=>plan?.mode==='restore');preparedDrafts=restore?[]:[...drafts.entries()];$('review-content').replaceChildren();for(const plan of plans){const item=el('div',undefined,'review-item');item.append(el('strong',resourceName(plan.resource)));for(const change of plan.changes??[]){if(restore){item.append(el('div',`${labels[change.path]??change.path}：${restoreDisplay(change.before??change.current)} → ${restoreDisplay(change.value)}`));}else{const draft=preparedDrafts.find(([,d])=>resourceKey(d.resource)===resourceKey(plan.resource)&&d.path===change.path)?.[1];item.append(el('div',`${labels[change.path]??change.path}：${draft?.baseValue||'空值 / 默认'} → ${change.value||'空值 / 默认'}`));}}item.append(el('div',`影响范围：${plan.resource.kind==='provider'?'所有引用此模型的功能':plan.resource.kind==='plugin'?'使用此插件的全部账号':'当前账号 / 全局配置'}${restore?' · 恢复会覆盖该资源的完整对象':''}`,'muted'));$('review-content').append(item);}const warning=planWarning(plans.map(plan=>plan?.warning).find(text=>typeof text==='string'&&text.trim()),{restore});const warningEl=$('review-warning');warningEl.hidden=!warning;if(warning){warningEl.textContent=warning.text;warningEl.className=warning.kind==='danger'?'warning-text':'info-text';}$('ack').checked=false;$('apply').disabled=true;$('review').showModal();}
+function showReview(plansToShow,{restore=false}={}){plans=plansToShow;restore=restore||plans.some(plan=>plan?.mode==='restore');preparedDrafts=restore?[]:[...drafts.entries()];$('review-content').replaceChildren();for(const plan of plans){const item=el('div',undefined,'review-item');item.append(el('strong',resourceName(plan.resource)));for(const change of plan.changes??[]){if(restore){item.append(el('div',`${labels[change.path]??change.path}：${restoreDisplay(change.before??change.current)} → ${restoreDisplay(change.value)}`));}else{const draft=preparedDrafts.find(([,d])=>resourceKey(d.resource)===resourceKey(plan.resource)&&d.path===change.path)?.[1];if(change.secret){item.append(el('div',`${labels[change.path]??change.path}：${change.summary??'（已隐藏）'}`));}else{const reviewText=value=>change.path.startsWith('provider_settings.web')?webSearchValueText(change.path,value):(value||'空值 / 默认');item.append(el('div',`${labels[change.path]??change.path}：${reviewText(draft?.baseValue)} → ${reviewText(change.value)}`));}}}item.append(el('div',`影响范围：${plan.resource.kind==='provider'?'所有引用此模型的功能':plan.resource.kind==='plugin'?'使用此插件的全部账号':'当前账号 / 全局配置'}${restore?' · 恢复会覆盖该资源的完整对象':''}`,'muted'));$('review-content').append(item);}const warning=planWarning(plans.map(plan=>plan?.warning).find(text=>typeof text==='string'&&text.trim()),{restore});const warningEl=$('review-warning');warningEl.hidden=!warning;if(warning){warningEl.textContent=warning.text;warningEl.className=warning.kind==='danger'?'warning-text':'info-text';}$('ack').checked=false;$('apply').disabled=true;$('review').showModal();}
 async function prepare(){if(busy||!drafts.size)return;busy=true;renderDrafts();let latest=null,resource=null;try{latest=await api(snapshotPath(selectedDevice));const planned=[];for(const group of groups(drafts)){resource=group.resource;const actual=currentRevision(latest,group.resource);if(!group.revision||actual!==group.revision)throw Error('CONCURRENT_CHANGE');const result=await api(deviceApiPath('/plans',selectedDevice),{resource:group.resource,changes:group.changes,expectedRevision:group.revision});if(result.revision!==group.revision)throw Error('CONCURRENT_CHANGE');planned.push(result);}showReview(planned,{restore:false});}catch(e){if(handleDenied(e)){invalidatePlans();}else if(e?.message==='CONCURRENT_CHANGE'){showConflict(resource,latest);message(errors.CONCURRENT_CHANGE,true);invalidatePlans();}else{message(errorText(e),true);invalidatePlans();}}finally{busy=false;renderDrafts();}}
 async function apply(){if(busy||!plans.length||!$('ack').checked)return;busy=true;$('apply').disabled=true;$('close-review').disabled=true;$('cancel-review').disabled=true;let completed=0,hotLoad=null;const restoring=plans.some(plan=>plan?.mode==='restore');try{for(const plan of plans){const result=await api(deviceApiPath('/apply',selectedDevice),{id:plan.id});hotLoad=result?.hotLoad??hotLoad;completed++;for(const [key,d]of preparedDrafts)if(resourceKey(d.resource)===resourceKey(plan.resource))drafts.delete(key);}const base=restoring?`已恢复并回读 ${completed} 个资源；恢复覆盖了所选资源的完整对象。`:`已保存并回读 ${completed} 个配置资源。未执行模型生成测试，也不以此认定实际调用成功。`;const hot=hotLoadMessage(hotLoad);message(hot?`${base} ${hot}`:base);}catch(e){const uncertain=e.details?.outcome==='possibly-written';if(!handleDenied(e))message(`已完成 ${completed} 个资源，后续保存停止。${uncertain?'当前资源可能已写入，请先核对配置与备份，不要直接重试。':errorText(e)}${e.details?.backupId?` 备份：${e.details.backupId}`:''}`,true);}finally{busy=false;$('close-review').disabled=false;$('cancel-review').disabled=false;$('review').close();invalidatePlans();renderDrafts();await refresh({forceRender:true});if(restoring||(isRemoteSnapshot(snapshot)&&snapshotWritable(snapshot)))await loadBackups();}}
 $('connect-form').addEventListener('submit',async event=>{event.preventDefault();const entered=$('token').value.trim();$('token').value='';if(!entered){message('请先粘贴本次会话令牌。',true);return;}token=entered;await refresh({forceRender:true,persist:true});});$('refresh').addEventListener('click',()=>refresh({manual:true}));$('search').addEventListener('input',event=>{search=event.target.value;if(snapshot){renderResources();renderModels();}});$('issues').addEventListener('change',event=>{onlyIssues=event.target.checked;if(snapshot){renderResources();renderModels();}});$('prepare').addEventListener('click',prepare);$('clear').addEventListener('click',()=>{drafts.clear();invalidatePlans();render();});$('ack').addEventListener('change',event=>{$('apply').disabled=!event.target.checked||busy;});$('apply').addEventListener('click',apply);for(const id of ['close-review','cancel-review'])$(id).addEventListener('click',()=>{if(!busy)$('review').close();});$('review').addEventListener('cancel',event=>{if(busy)event.preventDefault();});

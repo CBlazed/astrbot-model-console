@@ -121,6 +121,23 @@
 | `provider_tts_settings.provider_id` | tts |
 | `provider_ltm_settings.image_caption_provider_id` | vision |
 
+另有 2 个已审查的**非模型设置**（不算模型绑定，不参与「模型绑定」计数）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `provider_settings.web_search` | bool | 网页搜索开关；写入前由引擎把 `"true"/"false"` 转成真 boolean（AstrBot 会拒绝字符串 bool） |
+| `provider_settings.websearch_provider` | enum | 内置 9 个提供商；仅当快照检测到 `astrbot_plugin_model_websearch` 且已启用时，才追加 `model_native`（跟随当前聊天模型） |
+| `provider_settings.websearch_native_provider_id` | model | 模型原生搜索的固定搜索模型；空=跟随当前聊天模型。只有检测到插件并选中 `model_native` 时 UI 才显示 |
+
+检测与降级：快照通过 `GET /api/v1/plugins` 读取插件清单（只保留 `name/displayName/version/activated`，不进入页面敏感信息）。插件未安装、未启用或插件列表不可读时，`model_native` 不会出现在选项中；后端 `plan()` 会重新读一次插件状态并拒绝 `model_native`（`NATIVE_SEARCH_PLUGIN_UNAVAILABLE`），不信任过期的 UI 快照。若配置里已是 `model_native` 但插件不可用，绑定状态为 `plugin-unavailable`，只提示、不自动改盘。
+
+另有 9 个**内置搜索 API Key** 字段（8 个 `websearch_*_key` list + Baidu 的 `websearch_baidu_app_builder_key` string），属于 `secret` 类型：
+
+- 快照只返回 `configured/count`，**不返回 Key 值**；预览、草稿、冲突 diff、备份差异都显示「（已隐藏）」「设置 N 个 Key」。
+- `plan()` 解析 Key（list 用 JSON 数组字符串，最多 20 个、每个 1–4096 字符；string 直接取文本），内部保留原值写盘，给 UI 的 `changes` 由 `displayChanges()` 脱敏。
+- `POST /search-key-test`：服务端用请求里的 Key（留空则读该档案已保存 Key）向固定官方端点发一次最小搜索；只返回 ok/HTTP 状态/耗时/脱敏原因，不返回 Key；进程内 20 次/分钟限流。
+- `POST /search-native-test`：按 `providerId`（缺省取 `websearch_native_provider_id`，再退到聊天模型）读取 profile 的 provider source，向 `{api_base}/responses` 发 `tools:[{"type":"web_search"}]` 最小请求，返回是否真的出现 `web_search_call`/引用、耗时与脱敏原因；10 次/分钟限流。
+
 插件登记 15 个字段：
 
 | 插件 | 路径 | 能力/语义 |
@@ -143,7 +160,7 @@
 
 只允许更改共享 provider 的 `custom_extra_body.reasoning_effort`。当前支持级别通过本机反代 `/models?client_version=0.161.0` 查询，未知能力拒绝，不把客户端版本视为永远有效的常量。Luna 此前目录支持到 max，不支持 ultra；当前用户选的强度是可变配置，不能按旧记忆强制恢复 max。
 
-`discover()` 仅递归扫描对象中的字符串 provider_id/model_id 后缀，跳过数组，也不能覆盖 schema 未落盘默认值、硬编码及动态模型调用。现有“33 个绑定”是已登记范围，并不等于全系统所有调用点。
+`discover()` 仅递归扫描对象中的字符串 provider_id/model_id 后缀，跳过数组，也不能覆盖 schema 未落盘默认值、硬编码及动态模型调用。现有“33 个绑定”是已登记模型绑定数，不含上述 2 个网页搜索设置与未审查字段。
 
 ## 6. 数据读取与性能
 

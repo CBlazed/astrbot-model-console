@@ -8,6 +8,9 @@ import {readFileSync} from 'node:fs';
 import {spawn} from 'node:child_process';
 import {Gateway} from './gateway.mjs';
 import {Engine,knownError} from './engine.mjs';
+import {webSearchKeyField} from './registry.mjs';
+import {testSearchKey,supportedProviders} from './search-key-test.mjs';
+import {testNativeSearch} from './native-search-test.mjs';
 import {HttpGatewayAdapter} from './http-adapter.mjs';
 import {addDevice,getSecret,listDevices,loadRegistry,migrateSecrets,removeDevice,validateDevice} from './devices.mjs';
 import * as backupModule from './backup.mjs';
@@ -20,6 +23,8 @@ const assets=new Map([['/',['index.html','text/html']],['/index.html',['index.ht
 const PLAN_ID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHORT_BACKUP_ID=/^[0-9a-f]{8,12}$/i;
 const FULL_UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const nativeSearchTestTimes=[];
+const searchKeyTestTimes=[];
 const TOKEN=/^[a-z][a-z0-9-]{0,63}$/;
 const DIFF_ROUTE=/^\/backups\/([^/]+)\/diff$/;
 const DEVICE_HEALTH_ROUTE=/^\/devices\/([^/]+)\/health$/;
@@ -509,6 +514,43 @@ export function createServer(engine,token,{staticRoot=publicRoot,health={},limit
         let body;
         try{body=JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{return send(400,{error:'INVALID_JSON'});}
         if(!body||typeof body!=='object'||Array.isArray(body))return send(400,{error:'INVALID_BODY'});
+        if(url.pathname==='/search-native-test'){
+          const profileId=typeof body.profileId==='string'?body.profileId:'';
+          if(!profileId)return send(400,{error:'PROFILE_REQUIRED'});
+          let config;
+          try{config=await engine.gateway.read({kind:'profile',id:profileId});}catch{return send(400,{error:'PROFILE_UNAVAILABLE'});}
+          const requested=typeof body.providerId==='string'?body.providerId.trim():'';
+          const configured=config?.provider_settings?.websearch_native_provider_id;
+          const providerId=requested||(typeof configured==='string'?configured:'')||config?.agent_runner?.config?.model?.provider_id||'';
+          if(!providerId)return send(400,{error:'PROVIDER_REQUIRED'});
+          const now=Date.now();
+          nativeSearchTestTimes.splice(0,nativeSearchTestTimes.length,...nativeSearchTestTimes.filter(at=>now-at<60000));
+          if(nativeSearchTestTimes.length>=10)return send(429,{error:'TEST_RATE_LIMITED'});
+          nativeSearchTestTimes.push(now);
+          return send(200,await testNativeSearch({config,providerId}));
+        }
+        if(url.pathname==='/search-key-test'){
+          const provider=typeof body.provider==='string'?body.provider:'';
+          if(!provider||!supportedProviders.includes(provider))return send(400,{error:'INVALID_PROVIDER'});
+          let key=typeof body.key==='string'?body.key.trim():'';
+          const profileId=typeof body.profileId==='string'?body.profileId:'';
+          if(!key){
+            if(!profileId)return send(400,{error:'KEY_REQUIRED'});
+            let config;
+            try{config=await engine.gateway.read({kind:'profile',id:profileId});}catch{return send(400,{error:'PROFILE_UNAVAILABLE'});}
+            const field=webSearchKeyField(provider);
+            const name=field?field.path.split('.').at(-1):'';
+            const raw=name?config?.provider_settings?.[name]:undefined;
+            key=Array.isArray(raw)?String(raw.find(item=>typeof item==='string'&&item.trim())??''):typeof raw==='string'?raw.trim():'';
+            if(!key)return send(200,{ok:false,provider,label:'',status:null,latencyMs:0,message:'该档案尚未保存 Key，请先填写再测试。'});
+          }
+          if(key.length>4096)return send(400,{error:'KEY_TOO_LONG'});
+          const now=Date.now();
+          searchKeyTestTimes.splice(0,searchKeyTestTimes.length,...searchKeyTestTimes.filter(at=>now-at<60000));
+          if(searchKeyTestTimes.length>=20)return send(429,{error:'TEST_RATE_LIMITED'});
+          searchKeyTestTimes.push(now);
+          return send(200,await testSearchKey({provider,key}));
+        }
         if(url.pathname==='/plans'){
           const planDevice=url.searchParams.get('device');
           if(planDevice&&planDevice!=='local')return send(200,await remoteAgentPlan(await agentWriteDevice(planDevice),body));

@@ -11,8 +11,51 @@ export function groups(drafts){const result=new Map();for(const d of drafts.valu
 export function currentRevision(snapshot,resource){return resource.kind==='provider'?snapshot.models.find(m=>m.id===resource.id)?.revision:snapshot.resources.find(r=>resourceKey(r.resource)===resourceKey(resource))?.revision;}
 export const candidates=(models,capability)=>models.filter(m=>m.enabled&&m.capabilities.includes(capability));
 export const indexCapability=c=>['embedding','rerank'].includes(c);
-export const isIssue=b=>['missing','disabled','field-missing'].includes(b.status);
-export function counts(snapshot){return {models:snapshot.models.filter(m=>m.enabled).length,resources:snapshot.resources.length,bindings:snapshot.resources.reduce((n,r)=>n+(r.bindings?.length??0),0),issues:snapshot.resources.reduce((n,r)=>n+(r.status==='unavailable'?1:(r.bindings??[]).filter(isIssue).length),0)};}
+export const isIssue=b=>['missing','disabled','field-missing','plugin-unavailable','value-unrecognized'].includes(b.status);
+/** Secret API-key fields reviewed by the console; values never enter snapshots. */
+export const secretFieldTypes={tavily:'secret-list',bocha:'secret-list',brave:'secret-list',firecrawl:'secret-list',exa:'secret-list',anysearch:'secret-list',deepseek:'secret-list',serpapi:'secret-list',baidu_ai_search:'secret-string'};
+export const secretPaths={};
+for(const [provider,type] of Object.entries(secretFieldTypes))secretPaths[`provider_settings.websearch_${provider==='baidu_ai_search'?'baidu_app_builder':provider}_key`]=type;
+export const isSecretPath=path=>Object.hasOwn(secretPaths,path);
+/** Masked summary of a secret draft value (JSON array for list, raw text for string). */
+export function secretDraftText(path,value){
+ const type=secretPaths[path];
+ if(type!=='secret-list')return value&&String(value).trim()?'设置 Key（已隐藏）':'清空 Key';
+ let list=[];
+ try{list=JSON.parse(value||'[]');}catch{return '格式无效';}
+ const count=Array.isArray(list)?list.filter(item=>typeof item==='string'&&item.trim()).length:0;
+ return count>0?`设置 ${count} 个 Key（已隐藏）`:'清空 Key';
+}
+export function counts(snapshot){const modelBindings=r=>(r.bindings??[]).filter(b=>b.capability!=='setting');return {models:snapshot.models.filter(m=>m.enabled).length,resources:snapshot.resources.length,bindings:snapshot.resources.reduce((n,r)=>n+modelBindings(r).length,0),issues:snapshot.resources.reduce((n,r)=>n+(r.status==='unavailable'?1:(r.bindings??[]).filter(isIssue).length),0)};}
+
+const OFFICIAL_WEB_SEARCH_LABELS={serpapi:'SerpApi',deepseek:'DeepSeek Search API',tavily:'Tavily',baidu_ai_search:'Baidu AI Search',bocha:'Bocha',brave:'Brave',firecrawl:'Firecrawl',exa:'Exa',anysearch:'AnySearch'};
+export const webSearchProviderLabels={...OFFICIAL_WEB_SEARCH_LABELS};
+/** Human-readable value for a web-search setting draft/review row. */
+export function webSearchValueText(path,value){
+ if(path==='provider_settings.web_search')return value==='true'?'已启用':value==='false'?'已关闭':String(value??'');
+ if(path==='provider_settings.websearch_provider')return value==='model_native'?'跟随当前聊天模型（模型原生搜索）':OFFICIAL_WEB_SEARCH_LABELS[value]??String(value??'');
+ return String(value??'');
+}
+/**
+ * Card/section status for the web-search settings group.
+ * The native option is only meaningful when the plugin was detected and activated;
+ * if the stored value is model_native without an active plugin, the group is shown as an issue.
+ */
+export function webSearchStatus(settings,features){
+ const enabled=String(settings.find(b=>b.path==='provider_settings.web_search')?.value??'');
+ const provider=settings.find(b=>b.path==='provider_settings.websearch_provider');
+ const value=provider?.value??'';
+ const native=features?.nativeWebSearch;
+ const option=(provider?.options??[]).find(item=>item.value===value);
+ if(value==='model_native'&&!native?.available){
+  return {label:'模型原生 · 插件未启用',kind:'bad',noteClass:'note-warn',note:native?.installed?'检测到模型原生搜索插件但当前未启用：配置为“模型原生搜索”时搜索不会生效，请启用插件或改回内置提供商。':'当前配置是“模型原生搜索”，但未检测到模型原生搜索插件：搜索不会生效，请改回内置提供商。'};
+ }
+ if(enabled==='false')return {label:'网页搜索 · 已关闭',kind:'',noteClass:'note-info',note:'开关关闭时不会向模型提供网页搜索工具；已选择的提供商会被保留。'};
+ if(value==='model_native')return {label:'模型原生 · 已就绪',kind:'good',noteClass:'note-good',note:`检测到 astrbot_plugin_model_websearch${native?.version?` ${native.version}`:''}（已启用）。搜索将使用当前会话聊天模型的原生联网能力，不再依赖第三方搜索 Key。`};
+ if(option)return {label:`内置 · ${OFFICIAL_WEB_SEARCH_LABELS[value]??option.label}`,kind:'purple',noteClass:'note-info',note:'使用 AstrBot 内置搜索 API；需要先在 AstrBot 中配置对应提供商的 API Key。'};
+ if(!native?.listAvailable)return {label:'插件列表不可读',kind:'warn',noteClass:'note-info',note:'无法读取 AstrBot 插件列表，因此只显示内置搜索提供商；远程设备可能需要插件读取权限。'};
+ return {label:'提供商未识别',kind:'warn',noteClass:'note-warn',note:'当前网页搜索提供商不在已审查列表内，只能改回已知值。'};
+}
 
 /** Session token: survives reload via sessionStorage, dies with the tab. Never persistent storage, never logged. */
 const tokenKey='model-console.token';
@@ -151,7 +194,7 @@ export function planWarning(warning,{restore=false}={}){
 }
 
 /** Binding status pills. field-missing means the path is absent from config, not an unverified empty value. */
-export const bindingStatuses={configured:{label:'已配置',kind:'good'},missing:{label:'引用缺失',kind:'bad'},disabled:{label:'模型禁用',kind:'bad'},'field-missing':{label:'字段不存在',kind:'bad'},'per-session':{label:'跟随会话',kind:'warn'},'empty-semantics-unverified':{label:'待核实',kind:'warn'}};
+export const bindingStatuses={configured:{label:'已配置',kind:'good'},off:{label:'已关闭',kind:''},empty:{label:'未配置',kind:''},missing:{label:'引用缺失',kind:'bad'},disabled:{label:'模型禁用',kind:'bad'},'field-missing':{label:'字段不存在',kind:'bad'},'plugin-unavailable':{label:'插件未启用',kind:'bad'},'value-unrecognized':{label:'值未识别',kind:'warn'},'per-session':{label:'跟随会话',kind:'warn'},'empty-semantics-unverified':{label:'待核实',kind:'warn'}};
 export function bindingStatus(status){const known=bindingStatuses[status];return known?{...known}:{label:String(status??'未知'),kind:'warn'};}
 
 /** A session/wildcard route exists, so cards only describe the platform-level view. */

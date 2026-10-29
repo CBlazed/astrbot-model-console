@@ -1,6 +1,7 @@
 /** Single-instance lock. One state directory belongs to one live Model Console process. */
 import {mkdir,readFile,rename,rm,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
+import net from 'node:net';
 
 export const ANOTHER_INSTANCE_RUNNING='ANOTHER_INSTANCE_RUNNING';
 export const LOCK_UNAVAILABLE='LOCK_UNAVAILABLE';
@@ -11,6 +12,23 @@ const isAlive=pid=>{
   if(!Number.isInteger(pid)||pid<=0)return false;
   try{process.kill(pid,0);return true;}catch(error){return error.code==='EPERM';}
 };
+/**
+ * Liveness probe for the port recorded in the lock.
+ * Windows pid reuse can make process.kill(pid,0) throw EPERM for an unrelated protected process,
+ * so a "live" pid is not enough: when the owner recorded a port, it must still accept loopback
+ * connections. Returns true/false, or null when no port was recorded (treat as live to be safe).
+ */
+export function isPortListening(port,timeoutMs=400){
+  if(!Number.isInteger(port)||port<=0)return Promise.resolve(null);
+  return new Promise(resolve=>{
+    const socket=net.connect({host:'127.0.0.1',port});
+    let settled=false;
+    const finish=value=>{if(settled)return;settled=true;clearTimeout(timer);socket.destroy();resolve(value);};
+    const timer=setTimeout(()=>finish(false),timeoutMs);
+    socket.once('connect',()=>finish(true));
+    socket.once('error',()=>finish(false));
+  });
+}
 const readLock=async path=>{
   try{const value=JSON.parse(await readFile(path,'utf8'));return value&&typeof value==='object'?value:null;}catch{return null;}
 };
@@ -20,6 +38,21 @@ const runningError=(lock,path)=>{
   error.details={pid:lock.pid,port:Number.isInteger(lock.port)?lock.port:null};
   return error;
 };
+/** A lock is stale when its pid is gone, or its recorded port no longer listens for an old lock
+ *  (Windows pid reuse can make process.kill(pid,0) throw EPERM for an unrelated protected process).
+ *  A recently written lock keeps the benefit of the doubt while the owner is still starting up. */
+async function lockIsStale(lock){
+  if(!lock||!isAlive(lock.pid))return true;
+  const port=Number(lock.port);
+  if(!Number.isInteger(port)||port<=0)return false;
+  const reachable=await isPortListening(port);
+  if(reachable===true)return false;
+  if(reachable===false){
+    const started=Date.parse(lock.startedAt);
+    return Number.isFinite(started)?Date.now()-started>5000:true;
+  }
+  return false;
+}
 
 /**
  * Acquire the single-instance lock in stateDir.
@@ -42,7 +75,7 @@ export async function acquireLock(stateDir,{port=0}={}){
         throw error;
       }
       const current=await readLock(path);
-      if(current&&isAlive(current.pid))throw runningError(current,path);
+      if(current&&!await lockIsStale(current))throw runningError(current,path);
       // Stale lock: antivirus/indexers can briefly hold the file, so retry the removal before giving up.
       let removed=false;
       for(let retry=0;retry<5&&!removed;retry++){

@@ -69,4 +69,25 @@ export class Gateway{
  async write(resource,config){const id=encodeURIComponent(resource.id);if(resource.kind==='provider')return this.call('PUT','/api/v1/providers/by-id',{provider_id:resource.id,config});if(resource.kind==='profile')return this.call('PUT',`/api/v1/config-profiles/${id}`,config);if(resource.kind==='plugin')return this.call('PUT','/api/v1/plugins/config',{plugin_id:resource.id,config});throw Error('INVALID_RESOURCE');}
  async efforts(id){const {provider}=await this.call('GET',`/api/v1/providers/by-id?provider_id=${encodeURIComponent(id)}&merged=true`);const base=new URL(provider.api_base);if(!['127.0.0.1','localhost'].includes(base.hostname)||base.protocol!=='http:')return null;try{const response=await this.fetcher(base.href.replace(/\/$/,'')+'/models?client_version=0.161.0',{redirect:'error',signal:AbortSignal.timeout(5000),headers:{Authorization:`Bearer ${provider.key?.[0]??''}`}});if(!response.ok)return null;const body=await response.json();const rows=body.data??body.models??[];const model=rows.find(x=>(x.id??x.slug)===provider.model);return model?.supported_reasoning_levels?.map(x=>typeof x==='string'?x:x.effort)??null;}catch{return null;}}
  async resources(){const [list,files,global]=await Promise.all([this.call('GET','/api/v1/config-profiles'),readdir(join(this.data,'config')),this.read({kind:'profile',id:'default'})]);let routing={},platforms=global.platform??[];try{routing=(await this.call('GET','/api/v1/config-routes')).routing??{};}catch{}try{platforms=(await this.call('GET','/api/v1/bots')).bots??platforms;}catch{}let stats=[];try{stats=(await this.call('GET','/api/v1/bots/stats')).platforms??[];}catch{}const publicPlatforms=platforms.map(p=>({id:p.id,type:p.type,status:stats.find(s=>s.id===p.id)?.status??'unknown'}));return [{kind:'profile',id:'default',identity:profileIdentity({id:'default'},publicPlatforms,routing)},...(list.info_list??[]).filter(x=>x.id!=='default').map(x=>({kind:'profile',id:x.id??x.uuid,identity:profileIdentity(x,publicPlatforms,routing)})),...files.filter(x=>x.endsWith('_config.json')).map(x=>({kind:'plugin',id:x.slice(0,-12)}))];}
+
+  /**
+   * Sanitized plugin inventory used only for feature detection (never for credentials).
+   * Returns null when the dashboard does not expose the plugin list; callers must then
+   * behave as if the optional plugin is absent instead of guessing.
+   */
+  async plugins(){
+    try{
+      const data=await this.call('GET','/api/v1/plugins');
+      const list=Array.isArray(data)?data:(data?.plugins??data?.list??[]);
+      return (Array.isArray(list)?list:[]).map(plugin=>{
+        const name=plugin?.name??plugin?.id??plugin?.plugin_id;
+        return typeof name==='string'&&name?{
+          name,
+          displayName:plugin?.display_name??plugin?.displayName??null,
+          version:typeof plugin?.version==='string'?plugin.version:null,
+          activated:plugin?.activated===true,
+        }:null;
+      }).filter(Boolean);
+    }catch{return null;}
+  }
 }

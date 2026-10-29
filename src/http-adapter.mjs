@@ -96,6 +96,27 @@ export class HttpGatewayAdapter{
       return {reachable:false,latencyMs:Date.now()-started,error:error?.code??'DEVICE_UNREACHABLE'};
     }
   }
+  /**
+   * Sanitized plugin inventory used only for feature detection (never for credentials).
+   * Returns null when the dashboard does not expose the plugin list; callers must then
+   * behave as if the optional plugin is absent instead of guessing.
+   */
+  async plugins(){
+    try{
+      const data=await this.call('GET','/api/v1/plugins');
+      const list=Array.isArray(data)?data:(data?.plugins??data?.list??[]);
+      return (Array.isArray(list)?list:[]).map(plugin=>{
+        const name=plugin?.name??plugin?.id??plugin?.plugin_id;
+        return typeof name==='string'&&name?{
+          name,
+          displayName:plugin?.display_name??plugin?.displayName??null,
+          version:typeof plugin?.version==='string'?plugin.version:null,
+          activated:plugin?.activated===true,
+        }:null;
+      }).filter(Boolean);
+    }catch{return null;}
+  }
+
 }
 
 function remoteIdentity(id,name,routing){

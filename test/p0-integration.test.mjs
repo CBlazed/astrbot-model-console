@@ -9,10 +9,11 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
+import net from 'node:net';
 import {createServer} from '../src/server.mjs';
 import {Engine} from '../src/engine.mjs';
 import {resolveStateDir,discoverAstrBotData,ASTRBOT_DATA_REQUIRED} from '../src/config.mjs';
-import {acquireLock,ANOTHER_INSTANCE_RUNNING} from '../src/lock.mjs';
+import {acquireLock,ANOTHER_INSTANCE_RUNNING,isPortListening} from '../src/lock.mjs';
 import {parseTokenHash,loadToken,saveToken,clearToken} from '../public/ui-state.mjs';
 
 const PLAN_ID='0f8fad5b-d9cb-469f-a165-70867728950e';
@@ -253,6 +254,28 @@ test('lock：不可能存活的 pid（999999）作为 stale 锁被替换并可�
     await lock.release();
     await assert.rejects(()=>readFile(join(state,'instance.lock')),error=>error.code==='ENOENT');
   }finally{await rm(state,{recursive:true,force:true});}
+});
+
+test('lock：存活 pid 但记录端口不再监听时按 stale 处理（Windows pid 复用/EPERM 假阳性）',async()=>{
+  const state=await temp();
+  try{
+    await writeFile(join(state,'instance.lock'),JSON.stringify({pid:process.pid,port:1,startedAt:new Date(Date.now()-3600000).toISOString()}),'utf8');
+    const lock=await acquireLock(state,{port:0});
+    const written=JSON.parse(await readFile(join(state,'instance.lock'),'utf8'));
+    assert.equal(written.pid,process.pid);
+    await lock.release();
+  }finally{await rm(state,{recursive:true,force:true});}
+});
+
+test('lock：端口探测区分监听、未监听与未知端口',async()=>{
+  assert.equal(await isPortListening(0),null);
+  assert.equal(await isPortListening(-1),null);
+  const server=net.createServer();
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const port=server.address().port;
+  assert.equal(await isPortListening(port),true);
+  await new Promise(resolve=>server.close(resolve));
+  assert.equal(await isPortListening(port),false);
 });
 
 function memoryStorage(){

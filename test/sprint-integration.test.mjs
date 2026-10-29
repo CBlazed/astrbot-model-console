@@ -496,10 +496,12 @@ test('P1-06 真实配置只读核对：present 字段绝不误报 field-missing�
       if(present){
         presentCount++;
         assert.notEqual(row.status,'field-missing',`${kind}:${id} 的 present 字段 ${row.path} 被误报 field-missing`);
-        if(row.value===''&&row.inherit!=='session'){presentEmpty++;assert.equal(row.status,'empty-semantics-unverified',`${id} ${row.path}`);}
+        if(row.value===''&&row.inherit!=='session'&&row.path!=='provider_settings.websearch_native_provider_id'){presentEmpty++;assert.equal(row.status,'empty-semantics-unverified',`${id} ${row.path}`);}
       }else{
         absentCount++;
-        assert.equal(row.status,'field-missing',`${kind}:${id} 的缺失字段 ${row.path} 应为 field-missing`);
+        // 搜索使用模型是可选设置：缺失等价于“跟随当前聊天模型”，不是 field-missing。
+        if(row.path==='provider_settings.websearch_native_provider_id')assert.equal(row.status,'configured',`${kind}:${id} 的可选搜索模型字段缺失时应视为跟随默认`);
+        else assert.equal(row.status,'field-missing',`${kind}:${id} 的缺失字段 ${row.path} 应为 field-missing`);
       }
     }
   }

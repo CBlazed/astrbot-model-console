@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {stage,groups,currentRevision,candidates,indexCapability,counts,parseTokenHash,loadToken,saveToken,clearToken,buildConflictRows,bindingStatus,routingNoticeText,isIssue,loadDevice,saveDevice,snapshotPath,isRemoteSnapshot,deviceOptions,healthBadge,deviceErrorText,deviceKind,deviceKindLabel,validateDeviceInput,backupWarnings,configVersionText,deviceApiPath,snapshotWritable,snapshotMode,hotLoadMessage,planWarning} from '../public/ui-state.mjs';
+import {webSearchProviderOptions} from '../src/registry.mjs';
+import {stage,groups,currentRevision,candidates,indexCapability,counts,parseTokenHash,loadToken,saveToken,clearToken,buildConflictRows,bindingStatus,routingNoticeText,isIssue,loadDevice,saveDevice,snapshotPath,isRemoteSnapshot,deviceOptions,healthBadge,deviceErrorText,deviceKind,deviceKindLabel,validateDeviceInput,backupWarnings,configVersionText,deviceApiPath,snapshotWritable,snapshotMode,hotLoadMessage,planWarning,webSearchStatus,webSearchValueText} from '../public/ui-state.mjs';
 test('UI drafts preserve original values and remove changes reverted to original',()=>{const resource={kind:'plugin',id:'one'};let drafts=stage(new Map(),resource,'model','luna','flash','r1');assert.equal([...drafts.values()][0].baseValue,'flash');drafts=stage(drafts,resource,'model','flash','flash','r1');assert.equal(drafts.size,0);});
 test('UI groups writes by resource while preserving unrelated resources',()=>{let drafts=new Map();drafts=stage(drafts,{kind:'plugin',id:'a'},'first','luna','','r');drafts=stage(drafts,{kind:'plugin',id:'a'},'second','luna','','r');drafts=stage(drafts,{kind:'profile',id:'b'},'main','flash','','s');assert.equal(groups(drafts).length,2);assert.equal(groups(drafts)[0].changes.length,2);});
 test('UI model candidates only include enabled models with declared capability',()=>{assert.deepEqual(candidates([{id:'a',enabled:true,capabilities:['llm']},{id:'b',enabled:false,capabilities:['vision']},{id:'c',enabled:true,capabilities:['vision']}],'vision').map(x=>x.id),['c']);assert.equal(indexCapability('embedding'),true);assert.equal(indexCapability('vision'),false);});
@@ -345,4 +346,42 @@ test('UI plan warning: engine boilerplate becomes neutral Chinese info, restore 
   assert.match(restoreFallback.text,/完整对象/);
   assert.equal(planWarning(undefined),null);
   assert.deepEqual(planWarning('自定义警告'),{text:'自定义警告',kind:'info'});
+});
+
+test('UI 网页搜索设置：原型结构、插件检测降级与不可用提示',()=>{
+ const app=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');
+ for(const text of ["'provider_settings.web_search':'启用网页搜索'","'provider_settings.websearch_provider':'网页搜索提供商'",'renderSettingsBlock','webSearchStatus','NATIVE_SEARCH_PLUGIN_UNAVAILABLE','settings-block','setting-select'])assert.ok(app.includes(text),`app.mjs 缺少 ${text}`);
+ const active={nativeWebSearch:{pluginId:'astrbot_plugin_model_websearch',installed:true,activated:true,available:true,listAvailable:true,version:'v0.1.0'}};
+ const missing={nativeWebSearch:{pluginId:'astrbot_plugin_model_websearch',installed:false,activated:false,available:false,listAvailable:true}};
+ const disabled={nativeWebSearch:{pluginId:'astrbot_plugin_model_websearch',installed:true,activated:false,available:false,listAvailable:true}};
+ const rows=(enabled,value,features)=>({enabled:{path:'provider_settings.web_search',value:enabled?'true':'false'},provider:{path:'provider_settings.websearch_provider',value,options:webSearchProviderOptions(features)}});
+ assert.equal(webSearchStatus([rows(false,'deepseek',missing).enabled,rows(false,'deepseek',missing).provider],missing).label,'网页搜索 · 已关闭');
+ assert.equal(webSearchStatus([rows(true,'model_native',active).enabled,rows(true,'model_native',active).provider],active).label,'模型原生 · 已就绪');
+ assert.equal(webSearchStatus([rows(true,'model_native',disabled).enabled,rows(true,'model_native',disabled).provider],disabled).kind,'bad');
+ assert.equal(webSearchStatus([rows(true,'tavily',missing).enabled,rows(true,'tavily',missing).provider],missing).label,'内置 · Tavily');
+ assert.equal(webSearchStatus([rows(true,'weird',missing).enabled,rows(true,'weird',missing).provider],missing).label,'提供商未识别');
+ assert.equal(webSearchValueText('provider_settings.web_search','false'),'已关闭');
+ assert.equal(webSearchValueText('provider_settings.websearch_provider','deepseek'),'DeepSeek Search API');
+ assert.equal(webSearchProviderOptions(missing).some(option=>option.value==='model_native'),false);
+ assert.equal(webSearchProviderOptions(disabled).find(option=>option.value==='model_native').disabled,true);
+ assert.equal(webSearchProviderOptions(active).find(option=>option.value==='model_native').disabled,false);
+});
+
+test('UI secret key editor never prefills saved values and uses the test endpoint',()=>{
+ const app=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');
+ for(const text of ['renderSecretKey','secret-input','清空现有 Key','/search-key-test','secretDraftText','isSecretPath','（已隐藏）','测试 Key','每行一个 Key'])assert.ok(app.includes(text),`app.mjs 缺少 ${text}`);
+ const start=app.indexOf('function renderSecretKey(');
+ const end=app.indexOf('function renderSettingsBlock(');
+ assert.ok(start>0&&end>start,'renderSecretKey 必须独立可审查');
+ const fn=app.slice(start,end);
+ assert.ok(!/binding\.value/.test(fn),'secret renderer 不得读取 binding.value');
+ assert.ok(fn.includes('binding.count'),'必须显示已配置 Key 数量');
+ assert.ok(fn.includes('profileId:resource.id'),'测试 Key 必须携带 profile id');
+});
+
+test('UI 搜索模型选择与原生搜索测试按钮契约',()=>{
+ const app=readFileSync(new URL('../public/app.mjs',import.meta.url),'utf8');
+ for(const text of ['搜索使用模型','websearch_native_provider_id','测试模型原生搜索','/search-native-test','确认添加/替换','清空现有 Key'])assert.ok(app.includes(text),`app.mjs 缺少 ${text}`);
+ assert.ok(app.includes('renderNativeTest'),'原生测试按钮必须独立渲染');
+ assert.ok(!/renderResources\(\);\s*\}\);/.test(app.split('function renderSecretKey')[1]?.split('function renderNativeTest')[0]??''),'Key 输入事件不应重建卡片');
 });
