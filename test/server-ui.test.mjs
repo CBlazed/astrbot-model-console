@@ -226,11 +226,14 @@ test('4xx diagnostics are recorded sanitized and exported only with a token',()=
   assert.ok(events.some(event=>event.status===403&&event.path==='/backups'&&event.code==='ACCESS_DENIED'));
   assert.ok(events.some(event=>event.status===400&&event.code==='INVALID_BACKUP_ID'));
   assert.equal((await fetch(base+'/diagnostics/export')).status,403);
+  // 上一步 403 本身会被记成诊断事件；先 flush 再对比，避免与已读取的快照竞态。
+  await server.flushDiagnostics();
   const exported=await fetch(base+'/diagnostics/export',{headers:auth});
   assert.equal(exported.status,200);
   const body=await exported.json();
   assert.ok(Array.isArray(body.events));
-  assert.deepEqual(body.events.at(-1),events.at(-1));
+  const after=await readFile(join(stateDir,'diagnostics.jsonl'),'utf8');
+  assert.deepEqual(body.events.at(-1),JSON.parse(after.trim().split('\n').at(-1)));
   assert.doesNotMatch(JSON.stringify(body),/[A-Za-z]:\\\\|Bearer|secret/);
 }));
 

@@ -404,9 +404,13 @@ test('Epic-3 产物：临时 --out 构建成功，白名单产物不含 state/te
       const actual=createHash('sha256').update(await readFile(join(product,entry.rel))).digest('hex');
       assert.equal(actual,entry.hash,`${entry.rel} 哈希不匹配`);
     }
-    // 真实密钥值不得进入产物。
-    const cmd=JSON.parse((await readFile('C:\\Users\\<你>\\.astrbot_launcher\\instances\\<实例ID>\\core\\data\\cmd_config.json','utf8')).replace(/^\uFEFF/,''));
-    const secrets=[cmd.dashboard?.jwt_secret,...(cmd.provider??[]).flatMap(p=>p.key??[]),...(cmd.provider_sources??[]).flatMap(s=>s.key??[])].filter(value=>typeof value==='string'&&value.length>=8);
+    // 真实密钥值不得进入产物；CI/干净机器没有本机 AstrBot 数据时跳过这段真实值扫描（白名单排除仍在上方断言）。
+    let secrets=[];
+    try{
+      const realData=process.env.ASTRBOT_DATA??'C:\\Users\\<你>\\.astrbot_launcher\\instances\\<实例ID>\\core\\data';
+      const cmd=JSON.parse((await readFile(join(realData,'cmd_config.json'),'utf8')).replace(/^\uFEFF/,''));
+      secrets=[cmd.dashboard?.jwt_secret,...(cmd.provider??[]).flatMap(p=>p.key??[]),...(cmd.provider_sources??[]).flatMap(s=>s.key??[])].filter(value=>typeof value==='string'&&value.length>=8);
+    }catch{}
     for(const file of files){
       if(!/\.(txt|md|mjs|js|css|html|json|cmd)$/i.test(file))continue;
       if((await stat(file)).size>5*1024*1024)continue;
