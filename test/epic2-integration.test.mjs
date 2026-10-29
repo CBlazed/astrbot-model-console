@@ -193,20 +193,22 @@ test('Epic-2 Agent：真实 startAgent + 真实 createServer 配对→快照→�
       const secretsText=await readFile(join(stateDir,'secrets.json'),'utf8');
       const storedSecret=JSON.parse(secretsText).secrets[device.id];
       const registryText=await readFile(join(stateDir,'devices.json'),'utf8');
-      const after=JSON.parse(await readFile(join(agentState,'agent.json'),'utf8'));
+      const agentJsonText=await readFile(join(agentState,'agent.json'),'utf8');
+      const after=JSON.parse(agentJsonText);
+      // Literal containment checks: secrets are base64/hex and may contain regex metacharacters (e.g. "++").
       if(storedSecret.startsWith('dpapi:')){
         // DPAPI 可用：hub 侧只有密文，无法在此解出 token 与 agent 哈希比对；只断言两侧都是合法形态。
         assert.match(storedSecret,/^dpapi:[A-Za-z0-9+/]+={0,2}$/);
         assert.match(after.tokenHash,/^[a-f0-9]{64}$/);
-        assert.doesNotMatch(secretsText,new RegExp(after.tokenHash));
+        assert.equal(secretsText.includes(after.tokenHash),false);
       }else{
         const token=storedSecret;
         assert.match(token,/^[a-f0-9]{64}$/);
         assert.equal(after.tokenHash,sha256(token),'hub 保存的 token 必须与 agent 侧哈希一致');
-        assert.doesNotMatch(await readFile(join(agentState,'agent.json'),'utf8'),new RegExp(token));
+        assert.equal(agentJsonText.includes(token),false);
       }
-      assert.doesNotMatch(registryText,new RegExp(agent.pairingCode));
-      assert.doesNotMatch(registryText,new RegExp(storedSecret));
+      assert.equal(registryText.includes(agent.pairingCode),false);
+      assert.equal(registryText.includes(storedSecret),false);
       assert.equal(after.pairing,null,'配对码一次使用后失效');
 
       // 重复设备在配对前被拒：不得再次消耗 agent 配对状态。
