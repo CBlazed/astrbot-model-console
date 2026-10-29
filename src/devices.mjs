@@ -8,7 +8,6 @@ import {randomUUID} from 'node:crypto';
 import {protect,unprotect,isProtected,SECURE_STORE_UNAVAILABLE} from './secure-store.mjs';
 
 export const DEVICE_KINDS=['http','ssh','agent'];
-export const DEVICE_AUTH_TYPES=['api-key','agent-token'];
 export const SECRETS_VERSION=2;
 const AUTH_FOR_KIND={http:'api-key',ssh:'api-key',agent:'agent-token'};
 

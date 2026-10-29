@@ -56,14 +56,18 @@ dist\AstrBotModelConsole\
 ├─ start.cmd                唯一入口：用相对路径的 node.exe 启动（编辑模式，保存仍需预览+Apply）
 ├─ package.json
 ├─ README.md
+├─ CHANGELOG.md
 ├─ SHA256SUMS.txt           逐文件 sha256 校验清单
 ├─ src\                     后端源码（*.mjs）
 ├─ public\                  UI 静态资源
 └─ docs\
+   ├─ USAGE.zh-CN.md        用户手册
+   ├─ FAQ.zh-CN.md          常见问题
    ├─ HANDOVER.zh-CN.md     接手指南
-   ├─ BUILD.zh-CN.md        本文档
-   └─ DESIGN-multi-device-2026-10-29.zh-CN.md（存在时）
+   └─ BUILD.zh-CN.md        本文档
 ```
+
+若仓库根目录有 `LICENSE`，会一并复制到包内。历史归档 `docs/history/` 不进入便携包。
 
 `--zip` 会额外生成：
 
@@ -129,8 +133,9 @@ zip 的 sha256 会在 `--zip` 构建输出的最后一行打印，可随 zip 一
 构建脚本采用**白名单**复制，只包含：
 
 ```
-src/  public/  package.json  README.md
-docs/HANDOVER.zh-CN.md  docs/BUILD.zh-CN.md  docs/DESIGN-multi-device-2026-10-29.zh-CN.md
+src/  public/  package.json  README.md  LICENSE（存在时）
+docs/HANDOVER.zh-CN.md  docs/USAGE.zh-CN.md  docs/FAQ.zh-CN.md
+docs/BUILD.zh-CN.md
 ```
 
 （`start.cmd` 由构建脚本生成，不来自源码树。）

@@ -25,9 +25,9 @@ const PRODUCT='AstrBotModelConsole';
 const SCRIPT_DIR=dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT=resolve(SCRIPT_DIR,'..');
 const REQUIRED_DIRS=['src','public'];
-const REQUIRED_FILES=['package.json','README.md'];
-const REQUIRED_DOCS=['docs/HANDOVER.zh-CN.md'];
-const OPTIONAL_DOCS=['docs/BUILD.zh-CN.md','docs/DESIGN-multi-device-2026-10-29.zh-CN.md'];
+const REQUIRED_FILES=['package.json','README.md','CHANGELOG.md','LICENSE'];
+const REQUIRED_DOCS=['docs/HANDOVER.zh-CN.md','docs/USAGE.zh-CN.md','docs/FAQ.zh-CN.md'];
+const OPTIONAL_DOCS=['docs/BUILD.zh-CN.md'];
 const SKIP_NAMES=new Set(['.git','node_modules','state','dist','test','scripts']);
 
 const isFile=async path=>{try{return (await stat(path)).isFile();}catch{return false;}};

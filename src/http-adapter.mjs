@@ -1,7 +1,5 @@
 /** Remote AstrBot adapter over the official OpenAPI v1 surface with a scoped API key.
  *  Implements the same gateway-shaped interface Engine expects: read/write/resources/efforts. */
-import {readFile} from 'node:fs/promises';
-import {join} from 'node:path';
 
 const PLATFORM_ROUTE=/^[^:]+::$/;
 
@@ -114,12 +112,4 @@ function remoteIdentity(id,name,routing){
 
 export function adapterError(code,message){
   const error=Error(message);error.code=code;return error;
-}
-
-/** Read the AstrBot version from a local data dir (best effort, used for support bundles). */
-export async function localAstrBotVersion(dataDir){
-  try{
-    const raw=JSON.parse((await readFile(join(dataDir,'cmd_config.json'),'utf8')).replace(/^\uFEFF/,''));
-    return raw?.config_version??null;
-  }catch{return null;}
 }

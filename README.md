@@ -1,70 +1,162 @@
-# AstrBot 模型切换器（Model Console）
+# AstrBot 模型控制台（Model Console）
 
-本机优先的 AstrBot 模型管理工具，支持 HTTP/SSH/Agent 远程设备只读查看，可打包分发给其他用户（便携 node 包，无安装器）。Node.js 24.22+、零第三方运行依赖、ESM + JSDoc，不使用 Python。
+在浏览器里集中查看和切换 AstrBot 的模型绑定：核心配置、机器人实例、插件、模型库；改完先预览、再备份、再写入，支持 HTTP / SSH / Agent 远程设备。
 
-**接手入口：[设计与维护交接文档](docs/HANDOVER.zh-CN.md)。** 该文档统一记录当前实现、维护流程、身份来源、API、测试、故障定位和已知限制。
+Windows 便携包解压即用，**不需要安装 Node.js、没有安装器、没有自动更新**；源码零第三方运行依赖。
 
-**2026-10-29 文档：** [设计缺陷评审](docs/REVIEW-2026-10-29.zh-CN.md)、[P0 审计](docs/P0-AUDIT-2026-10-29.md)、[P1/P2 清单](docs/BACKLOG-2026-10-29.zh-CN.md)、[Sprint 审计](docs/SPRINT-AUDIT-2026-10-29.md)、[Epic-2/3 审计](docs/EPIC2-AUDIT-2026-10-29.md)、[第二阶段审计（远程写/DPAPI/浏览器）](docs/PHASE3-AUDIT-2026-10-29.md)、[多设备设计](docs/DESIGN-multi-device-2026-10-29.zh-CN.md)、[便携包构建](docs/BUILD.zh-CN.md)。
+![控制台首页](docs/assets/e2e-home-2026-10-29.png)
 
-## 启动与构建
+> 界面截图来自真实浏览器（Chrome headless）加载控制台 + 模拟 AstrBot 数据；不是设计稿。
+
+## 为什么需要它
+
+AstrBot 的模型配置分散在三个地方：profile 配置（主对话、压缩、视觉、语音）、插件配置（每个插件各有一套 provider 字段）、全局 provider 定义。改一个模型往往要跨多个 JSON 和多个页面，改错一个字段就可能让某个插件静默失效。
+
+这个工具把这些绑定聚合到一张界面里，并且只开放**已审查过的字段**：
+
+- 只改白名单字段，其余字段原样保留；
+- 写入前强制备份（JSON 逐文件 SHA-256 + SQLite `quick_check`）；
+- 保存后回读比对，成功/失败都记审计；
+- 不做模型生成、不代理请求、不管理 QQ 协议端。
+
+## 功能
+
+### 模型绑定总览
+
+- 核心配置每个 profile 的 6 类绑定：主对话、压缩、图片描述、STT、TTS、长期记忆图片描述。
+- 15 个插件字段，覆盖 4 个插件：`group_chat_plus`、`livingmemory`、`self_learning`、`meme_manager`（LLM / vision / embedding / rerank）。
+- 模型库：共享 provider 定义、已登记引用、推理强度（`reasoning_effort`）。
+
+### 安全编辑
+
+- **草稿 → 预览 → 逐资源应用**：不点应用不会写盘，计划只存在内存里，重启即失效。
+- **revision 双重校验**：计划创建、应用前、备份后各核对一次版本；外部改动会得到 `CONCURRENT_CHANGE` 和可视差异。
+- **冲突 diff**：显示「本地草稿 / 最新服务端值」，可一键以最新值重新编辑。
+- **写前备份 + 写后回读**：备份失败直接阻断写入；回读不一致返回 `VERIFY_FAILED`，不会假装成功。
+- **审计**：`audit.jsonl` 记录 apply-start / applied / apply-failed，不含完整配置与凭证。
+
+### 备份、恢复与诊断
+
+- 备份保留策略：默认 10 份 + 总大小上限（默认 2048 MB），超限删最旧并写诊断。
+- 备份列表、占用统计、清理、恢复前差异（只列已审查字段）。
+- 恢复是**整对象回写**：先看 diff → 生成恢复计划 → 预览 → 应用，仍然走备份与版本校验。
+- 诊断日志 1 MiB 滚动保留 3 份，脱敏后可导出。
+
+### 远程设备
+
+| 类型 | 接入方式 | 读写 |
+|---|---|---|
+| HTTP | AstrBot OpenAPI Key（`abk_`） | 只读 |
+| SSH | 本机 `ssh -N -L` 隧道 + 远端日志自动发现 dashboard 端口 | 只读 |
+| Agent | 目标机运行同一个 `node src/agent.mjs`，8 位一次性配对码 | 默认只读；加 `--enable-writes` 后可远程计划/应用/备份 |
+
+远程写入只在目标 Agent 本地做备份与审计，返回 `hotLoad` 证据；`hotLoad.verified:true` 只代表日志出现重载标记，不代表模型生成成功。
+
+### 安全模型
+
+- 只监听 `127.0.0.1`，端口默认随机；不提供公网监听开关。
+- 会话令牌 + Host/Origin 校验 + CSP；AstrBot JWT 与上游 API Key 只在后端使用，不进入页面。
+- 设备凭据用 Windows DPAPI 加密存 `dpapi:`；DPAPI 不可用时降级明文并在诊断里留痕。
+- 静态资源白名单，不暴露源码、状态目录与备份。
+
+### 便携分发
+
+- 内置 `node.exe`，解压双击 `start.cmd`（编辑模式，保存仍需预览 + Apply）。
+- 产物带逐文件 `SHA256SUMS.txt`；升级 = 替换整个目录，用户数据不在包内。
+- 构建脚本零依赖：`node scripts/build-package.mjs --zip`。
+
+## 快速开始
+
+### 方式一：便携包（推荐）
+
+1. 下载 Release 里的 `AstrBotModelConsole-<版本>-win-x64.zip`；
+2. 解压到普通用户目录（不要放 `C:\Program Files`）；
+3. 双击 `start.cmd`，浏览器会自动打开控制台。
+
+目标机器不需要预装 Node.js。首次启动会自动扫描 AstrBot 的 data 目录；扫描不到时按窗口提示设置：
 
 ```powershell
-cd 'model-console'
-node --test --test-isolation=none   # 受限沙箱里 node --test 可能因 spawn EPERM 失败，用这个兜底
-.\start-console-edit.cmd             # 唯一启动入口：编辑模式（保存仍需预览+确认）
-# 临时只读查看（不推荐日常用）：
-node src/server.mjs --open
-
-node scripts/build-package.mjs       # 便携包（含 node.exe + SHA256SUMS）
-node scripts/build-package.mjs --zip # 另生成 zip
+$env:ASTRBOT_DATA = 'C:\Users\<你>\.astrbot_launcher\instances\<实例>\core\data'
+.\start.cmd
 ```
 
-没有独立的只读启动脚本：这个工具的目标就是方便修改，编辑模式同样能完成排查；只是保存时仍要在界面里预览并确认。便携包内同样只有一个 `start.cmd`（编辑模式）。
+### 方式二：源码运行
 
-`ASTRBOT_DATA` 不再写死在脚本里：优先用环境变量，否则自动扫描 `%USERPROFILE%\.astrbot_launcher\instances\*\core\data` 与 `%USERPROFILE%\.astrbot\data`，唯一命中才自动使用。默认随机端口，仅监听 127.0.0.1。状态目录（备份/审计/锁/设备/诊断）默认在 `%LOCALAPPDATA%\AstrBotModelConsole\state`，可用 `MODEL_CONSOLE_STATE` 覆盖；项目内旧 `state/` 只提示、不迁移。令牌存 `sessionStorage`（刷新存活、关标签失效），URL 片段读取后清除。
+```powershell
+git clone <本仓库地址>
+cd model-console
+node --version          # 需要 >= 24.22
+.\start-console-edit.cmd   # 编辑模式（依赖 PATH 里的 node）
+# 临时只读查看
+node src/server.mjs --open
+```
 
-## 当前能力
+### 首次启动会发生什么
 
-- 总览、本体/插件卡片、模型库、待应用面板、预览与确认、单资源保存与回读。
-- 身份只来自 AstrBot 实例与平台级路由；default 是合法配置目标；闲置 profile 单独分组。
-- 前台自动同步、草稿保留、冲突 diff 与“以最新值重新编辑”、只读/可写状态、脱敏审计。
-- 推理强度按后端能力目录放行，不从模型名猜。
-- 单实例锁；同一状态目录只允许一个控制台进程。
-- 备份保留（默认 10 份，`MODEL_CONSOLE_BACKUP_KEEP`）+ 总大小上限（`MODEL_CONSOLE_BACKUP_MAX_MB`，默认 2048MB）+ 备份列表/清理/恢复入口（恢复会覆盖该资源完整对象）。
-- 诊断日志 `diagnostics.jsonl`（1 MiB 滚动、保留 3 份、脱敏）。
-- 远程设备：HTTP（OpenAPI Key）、SSH（本机 ssh 隧道 + 远端日志自动发现端口）、Agent（同程序 `node src/agent.mjs` 配对）。
-- **Agent 远程写**（需目标 Agent `--enable-writes` 且设备勾选“允许远程写入”）：`/plans?device=`、`/apply?device=`、`/backups?device=` 代理到 Agent；备份/审计在目标机本地完成；apply 返回 `hotLoad` 证据（只有日志出现重载标记才 verified）。HTTP/SSH 保持只读。
-- 设备凭据：Hub 侧 `secrets.json` 用 Windows DPAPI 加密（`dpapi:`），DPAPI 不可用时降级明文并在诊断留痕；Agent 只存 token/配对码哈希。
-- 首启向导、设备选择器、远程设备健康徽标、配置版本；`/health` 返回控制台版本/数据目录/状态目录/读写模式。
-- 真实浏览器验收截图：[docs/assets/e2e-home-2026-10-29.png](docs/assets/e2e-home-2026-10-29.png)（Chrome headless，fake AstrBot 数据）。
-- 便携打包：内置 node.exe、SHA256SUMS、`--zip`；解压双击 `start.cmd`（编辑模式），无安装器、无自动更新（升级=替换目录）。
+1. 在状态目录（默认 `%LOCALAPPDATA%\AstrBotModelConsole\state`）获取单实例锁；
+2. 读取 AstrBot 最新启动日志里的 dashboard 端口，用 `jwt_secret` 在内存里签 JWT；
+3. 监听随机回环端口，打印带一次性令牌的 URL；
+4. 首启向导引导确认 AstrBot data 目录与读写模式。
 
-## 必须保留的边界
+状态目录包含备份、审计、设备凭据与诊断日志，**不要分享、不要提交**。
 
-- 保存/回读成功不等于热加载或模型生成成功。
-- 仅当前平台级路由视图；不完整解析会话/通配符路由（界面会提示 granular>0）。
-- profile/人格显示名不是机器人身份；实例标识不等于 QQ 昵称。
-- 插件隐藏 schema、动态调用和数组字段覆盖不完整。
-- 向量/重排序切换需单独迁移；没有跨资源原子事务，恢复也是整对象回写。
-- AstrBot 无原子 CAS；版本检查只能缩小竞态窗口。
-- 远程写仅限 Agent（目标机本地备份与审计，热加载只能给证据、不保证）；HTTP/SSH 永远只读。
-- DPAPI 不可用（非 Windows/域策略/环境限制）时设备密钥降级明文，只在用户目录权限下保护；分发时需知悉。
-- 真实模型配置是用户可变状态，不按历史对话强制恢复。
+## 支持的 AstrBot 版本
 
-## API 与源码
+在 AstrBot **4.29.3** 上实测；依赖 dashboard `/api/v1/*` 的实际返回结构。升级 AstrBot 后如果接口变化，工具会在读取阶段报错而不是猜测字段。
 
-| 路径 | 用途 |
+## 已知限制（请按原文理解）
+
+- 保存并回读成功 ≠ 热加载成功 ≠ 模型可生成；工具不验证后两者。
+- 只解析平台级路由视图；存在会话级/通配符路由时界面会提示，不声称是最终配置。
+- profile / 人格显示名不是机器人身份；实例标识不是 QQ 昵称。
+- 插件隐藏 schema、数组字段覆盖不完整；未审查字段一律只读。
+- 向量 / 重排序模型不能通过本工具完成迁移（会明确拒绝）。
+- 没有跨资源原子事务；恢复也是整对象回写，靠 revision 双检缩小竞态窗口。
+- 远程写仅限 Agent 设备；HTTP / SSH 永远只读。
+- DPAPI 不可用（非 Windows、域策略、受限环境）时设备密钥降级明文。
+- 便携包只提供 Windows x64；其他系统只能源码运行且未经验证。
+
+## 文档
+
+| 文档 | 内容 |
 |---|---|
-| GET /health | 健康 + version/dataPath/stateDir/readOnly |
-| GET /snapshot[?device=] | 去密钥后的模型、资源、绑定、revision、routing |
-| GET /capabilities?provider_id=... | 推理级别与核实状态 |
-| POST /plans / POST /restore-plans | 修改/恢复预览计划 |
-| POST /apply | 显式开启编辑模式后应用 |
-| GET /backups、POST /backups/prune | 备份列表与清理 |
-| GET /backups/:id/diff | 恢复前差异（已审查字段） |
-| GET/POST/DELETE /devices、GET /devices/:id/health | 远程设备注册表 |
-| GET /diagnostics/export | 诊断事件导出 |
+| [docs/USAGE.zh-CN.md](docs/USAGE.zh-CN.md) | 用户手册：界面导览、典型任务、环境变量、故障排查 |
+| [docs/FAQ.zh-CN.md](docs/FAQ.zh-CN.md) | 32 条常见问题 |
+| [docs/HANDOVER.zh-CN.md](docs/HANDOVER.zh-CN.md) | 设计与维护交接（开发者入口） |
+| [docs/BUILD.zh-CN.md](docs/BUILD.zh-CN.md) | 便携包构建、校验、升级 |
+| [docs/history/](docs/history/README.md) | 2026-10-29 评审 / 审计 / 多设备设计归档（历史快照，仅仓库内，便携包不含） |
 
-静态资源之外所有路由需要本次工具令牌，并受 Host/Origin 校验。AstrBot JWT、OpenAPI Key 与上游密钥只在后端使用。
+## 开发与测试
 
-后端位于 `src/`，界面位于 `public/`，测试位于 `test/`，构建脚本位于 `scripts/`。状态目录含敏感备份/密钥，不可发布、上传或提交。
+```powershell
+node --test --test-isolation=none     # 290 项测试（受限沙箱里 node --test 可能 spawn EPERM，用这个兜底）
+node scripts/build-package.mjs        # 构建便携包到 dist/
+node scripts/build-package.mjs --zip  # 另生成 zip
+```
+
+零第三方运行依赖、无前端构建步骤：`src/` 是 ESM 后端，`public/` 是原生 JS/CSS 前端，`test/` 是 `node:test` 测试。
+
+### 目录结构
+
+```
+model-console/
+├─ src/            后端模块
+├─ public/         界面
+├─ test/           测试
+├─ scripts/        构建脚本
+├─ docs/           文档（history/ 为历史归档）
+├─ start-console-edit.cmd
+└─ package.json
+```
+
+## 贡献
+
+这是一个个人自用工具，按需迭代。提交前请确保：
+
+1. `node --test --test-isolation=none` 全绿；
+2. 改动后端后重启控制台，改动前端刷新即可；
+3. 不提交 `state/`、`dist/`、任何 token / API Key / 备份。
+
+## 许可
+
+[MIT](LICENSE)。可自由使用、修改、分发，保留版权与许可声明即可。

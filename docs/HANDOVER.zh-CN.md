@@ -13,8 +13,8 @@
 3. 阅读 `src/registry.mjs`、`src/gateway.mjs`、`src/engine.mjs`；改 UI 再读 `public/app.mjs`、`public/ui-state.mjs`。
 4. 如需确认运行态，先只读请求控制台 `/health`、`/snapshot`；必要时运行 `node src/inspect.mjs`。不要把只读检查变成自动保存或生成测试。
 5. 记录目标、改前状态、变更范围、验证证据和未验证内容。不要自动重放历史运维脚本。
-6. 若目标是“远程多设备”或“打包给其他用户”，先读 2026-10-29 的[缺陷评审](REVIEW-2026-10-29.zh-CN.md)与[改造设计](DESIGN-multi-device-2026-10-29.zh-CN.md)；本文描述的是当前单机实现，不代表远程能力已存在。
-7. 下一轮任务从 [P1/P2 待修复清单](BACKLOG-2026-10-29.zh-CN.md) 取，按优先级与验收标准推进；完成一项就更新清单和工作记录。
+6. 若目标是“远程多设备”或“打包给其他用户”，先读 2026-10-29 的[缺陷评审](history/REVIEW-2026-10-29.zh-CN.md)与[改造设计](history/DESIGN-multi-device-2026-10-29.zh-CN.md)；两者是历史设计证据，含已废弃的安装器方案，当前行为以源码和本文为准。
+7. 下一轮任务从 [P1/P2 待修复清单](history/BACKLOG-2026-10-29.zh-CN.md) 取，按优先级与验收标准推进；完成一项就更新清单和工作记录。
 
 本项目此前对 bot 身份的错误已纠正。旧工作记录中的“示例旧名称官方 bot”“示例机器人B是 QQ 昵称”等判断不能直接沿用。工作区旧 AGENTS.md 的约束已被用户在会话中明确撤销，不能把文件仍然存在视为重新授权；仍应遵守当前会话和实际执行环境的权限。
 
@@ -195,7 +195,7 @@ AstrBot 没有原子 CAS。最后一次版本检查与 PUT 之间仍有外部客
 | 方法/路径 | 作用 |
 |---|---|
 | GET `/health` | `{status,version,dataPath,stateDir,readOnly,startedAt}`；不表示 AstrBot/QQ 在线 |
-| GET `/snapshot[?device=]` | 白名单模型、revision、绑定、身份、routing、device；远程设备只读 |
+| GET `/snapshot[?device=]` | 白名单模型、revision、绑定、身份、routing、device；HTTP/SSH 远程设备只读，Agent 设备按目标启动参数可写 |
 | GET `/capabilities?provider_id=...` | `{levels,verified}`，未知不编造档位 |
 | POST `/plans` | `{resource,changes,expectedRevision}`，产生计划不等于应用 |
 | POST `/apply` | `{id}`，只在启动显式允许写入时执行 |
@@ -301,7 +301,7 @@ node scripts/build-package.mjs [--zip]
 
 ## 12. 测试与证据分级
 
-接手运行 `node --test --test-isolation=none`（受限沙箱里 `node --test` 会因 spawn EPERM 失败；正常环境可省略参数）。2026-10-29 第二阶段审计后基线是 **290 项（288 pass / 2 skip，0 fail）**（以当次结果为准）。
+接手运行 `node --test --test-isolation=none`（受限沙箱里 `node --test` 会因 spawn EPERM 失败；正常环境可省略参数）。2026-10-29 最终基线是 **290 项（当前环境 290 pass / 0 fail；受限沙箱会 skip 2 项 DPAPI 测试）**（以当次结果为准）。
 
 | 测试文件 | 重点 |
 |---|---|
@@ -350,15 +350,13 @@ node scripts/build-package.mjs [--zip]
 4. **恢复已做**（备份列表/diff/恢复计划，整对象回写）；仍需防止覆盖备份之后其他人的修改——当前靠 revision 双检缩小窗口，不是原子事务。
 5. 受控日志/运行时验证器，明确“已热加载”与“已调用”证据，而不是仅改成功提示。
 6. ~~控制台单实例管理和启动器改进。~~ **P0 已部分修**：单实例锁与令牌刷新存活已完成；`active-service.json` 索引过期、启动器仍待改进。
-7. ~~更完整的错误诊断与只读操作日志。~~ **Sprint A 已做**：`diagnostics.jsonl` 脱敏滚动；未做限流与只读操作全量审计。
-8. ~~有上限的资源并发读取和身份元数据缓存。~~ **Sprint A 已做**：gateway 缓存 + 并发去重；身份元数据仍是顺序读取。
 7. ~~更完整的错误诊断与只读操作日志。~~ **Sprint A 已做**：`diagnostics.jsonl` 脱敏滚动 + 120/min 限频 + UI 导出；未做只读操作全量审计。
 8. ~~有上限的资源并发读取和身份元数据缓存。~~ **Sprint A 已做**：gateway 缓存 + 并发去重；身份元数据仍是顺序读取。
 9. UI 端到端、键盘和响应式视觉验收仍未做；当前只有静态 a11y + DOM 契约测试。真实浏览器在本沙箱因 Chromium 命名管道 IPC 被拒，需在沙箱外补。
-10. 远程设备（HTTP/SSH/Agent）目前只读：`/plans`、`/apply` 未按 device 路由；Agent 本地备份索引、热加载日志验证未做。
+10. 远程设备：HTTP/SSH 只读；Agent 支持远程计划/应用/备份（目标 Agent 需 `--enable-writes`），本地备份与审计已完成，热加载只给证据。只读 Agent 的 `/agent/v1/plans|apply|backups` 一律 403。
 11. 便携包与 zip 已可构建并验证 SHA；无安装器/自动更新（Epic-3 只做便携 node）。未在无 Node 的干净 Windows 上独立启动验证。
 12. ~~RISK-11：设备 API Key 明文存 `secrets.json`~~ **已修**：Windows DPAPI 加密 `dpapi:`，启动时自动迁移旧明文；DPAPI 不可用时降级明文并在诊断留痕（Hub UI 暂不提示）。真实 SSH/第二台 Windows、干净 Windows 启动、真实 Ctrl+C、DPAPI 多用户/域环境仍未验证。
-13. 远程写仅限 Agent（目标机本地备份/审计 + hotLoad 证据）；HTTP/SSH 只读。`hotLoad.marker` 在 Agent 侧未先脱敏，由 Hub 脱敏；只读 Agent 的 `/agent/v1/backups` 可列备份。
+13. 远程写仅限 Agent（目标机本地备份/审计 + hotLoad 证据）；HTTP/SSH 只读。`hotLoad.marker` 在 Agent 侧未先脱敏，由 Hub 脱敏。
 14. 真实浏览器已用 Chrome headless 验收（`docs/assets/e2e-home-2026-10-29.png`）；键盘/屏幕阅读器仍缺。
 
 ## 15. 修改后的交付要求
